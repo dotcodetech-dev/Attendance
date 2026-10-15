@@ -2,7 +2,7 @@ import { FormEvent, useState } from "react";
 
 import { api } from "../api/client";
 import { ConfigModal, Flash, SectionHead, Segmented, TimeField, fmtDate } from "../components/ConfigUi";
-import { EmployeeSelect, useEmployees } from "../components/EmployeeSelect";
+import { EmployeeSearch, useEmployees } from "../components/EmployeeSelect";
 import { Icons } from "../components/SidebarIcons";
 import { Req } from "../components/Req";
 
@@ -138,7 +138,7 @@ export function EssManualEntryPage() {
         <div className="hours-row" style={{ marginBottom: 0 }}>
           <div style={{ flex: "1 1 280px", minWidth: 0 }}>
             <label className="field-label" htmlFor="me-emp">Employee <Req /></label>
-            <EmployeeSelect id="me-emp" employees={employees} value={employeeCodeFilter} onChange={pickEmployee} style={{ width: "100%" }} />
+            <EmployeeSearch id="me-emp" employees={employees} value={employeeCodeFilter} onChange={(c) => (c ? pickEmployee(c) : setEmployeeCodeFilter(""))} style={{ width: "100%" }} />
           </div>
           <div>
             <label className="field-label" htmlFor="me-from">From</label>
@@ -204,7 +204,7 @@ export function EssManualEntryPage() {
             <div className="emp-grid">
               <div className="field field-span-2">
                 <label htmlFor="mf-emp">Employee <Req /></label>
-                <EmployeeSelect id="mf-emp" employees={employees} value={form.EmployeeCode} onChange={(c) => setForm({ ...form, EmployeeCode: c })} />
+                <EmployeeSearch id="mf-emp" employees={employees} value={form.EmployeeCode} onChange={(c) => setForm({ ...form, EmployeeCode: c })} />
               </div>
               <div className="field">
                 <label htmlFor="mf-date">Date <Req /></label>

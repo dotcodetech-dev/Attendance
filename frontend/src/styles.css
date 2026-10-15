@@ -3576,6 +3576,12 @@ label > span > .req, .field-label > .req { margin-left: 3px; }
 .dev-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .dev-panel-head h3 { margin: 0; font-size: 20px; font-weight: 800; }
 .dev-users-status { margin: 0; padding: 14px 20px; color: var(--ink-soft); font-size: 14px; }
+/* Search inside the Users-on-device panel (name, Employee Code, Face ID). */
+.dev-users-search { position: relative; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 20px;
+  border-bottom: 1px solid var(--line, #e6e8f0); }
+.dev-users-search input:not(#dus-none) { flex: 1 1 280px; max-width: 460px; height: 42px; padding: 0 14px 0 40px; }
+.dev-users-search-icon { position: absolute; left: 33px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
+.dev-users-search-count { font-size: 13px; color: var(--text-muted); }
 /* "Reader last polled …" line in the Users panel: green while the reader polls, amber when it has gone quiet. */
 .dev-reader-poll { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px; margin: 0; padding: 10px 20px;
   font-size: 13.5px; line-height: 1.5; border-bottom: 1px solid var(--line, #e6e8f0); }

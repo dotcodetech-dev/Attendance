@@ -159,9 +159,17 @@ def _upsert_bio(
 
 
 def _with_template_counts(db: Session, users: list) -> list:
-    """Add FaceCount / FingerCount / HasPhoto: what this server holds for each person (what readers have sent)."""
-    counts, photos, face_photos = template_counts(db, [u.EmployeeCode for u in users])
+    """Add FaceCount / FingerCount / HasPhoto: what this server holds for each person (what readers have sent),
+    and their HR Employee Code, so the Users panel can show and search it next to the Face ID."""
+    codes = [u.EmployeeCode for u in users]
+    counts, photos, face_photos = template_counts(db, codes)
+    hr_codes: dict[str, str] = {}
+    for i in range(0, len(codes), 1000):   # SQL Server parameter limit
+        part = codes[i:i + 1000]
+        hr_codes.update({c: s for c, s in db.query(Employee.EmployeeCode, Employee.StringCode)
+                         .filter(Employee.EmployeeCode.in_(part))})
     for u in users:
+        u.StringCode = hr_codes.get(u.EmployeeCode) or None
         c = counts.get(u.EmployeeCode, {})
         u.FaceCount = c.get("FACE", 0)
         u.FingerCount = c.get("FINGER", 0)

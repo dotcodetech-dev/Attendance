@@ -73,6 +73,7 @@ class DeviceUserOut(BaseModel):
 class DeviceMachineUserOut(BaseModel):
     EmployeeCode: str
     EmployeeName: Optional[str] = None
+    StringCode: Optional[str] = None   # HR "Employee Code" of the person on this server (EmployeeCode is the Face ID)
     Role: Optional[str] = None
     Enabled: Optional[bool] = None
     Source: Optional[str] = None      # "sdk" = read live from the reader, "push" = from what it pushed to us

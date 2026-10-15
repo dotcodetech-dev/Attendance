@@ -49,7 +49,7 @@ function employeeLabel(e: any): string {
  * Value is the Face ID (EmployeeCode), the same as EmployeeSelect, so it can replace it.
  */
 export function EmployeeSearch({
-  employees, value, onChange, id, placeholder = "Type employee name or code…", style,
+  employees, value, onChange, id, placeholder = "Type name, Employee Code or Sort No…", style,
 }: {
   employees: any[];
   value: string;
@@ -140,6 +140,7 @@ export function EmployeeSearch({
               <span style={{ color: "var(--text-muted)", marginLeft: 8, fontSize: 13 }}>
                 {e.StringCode || e.EmployeeCode}
                 {e.StringCode && String(e.StringCode) !== String(e.EmployeeCode) ? ` · Face ID ${e.EmployeeCode}` : ""}
+                {e.ShortNo != null && String(e.ShortNo).trim() !== "" ? ` · Sort No ${e.ShortNo}` : ""}
                 {e.Department ? ` · ${e.Department}` : ""}
               </span>
             </li>

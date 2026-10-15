@@ -1,7 +1,11 @@
 from __future__ import annotations
+import mimetypes
 import os
 
 import logging
+
+# Windows' type registry often lacks .webp, so the logo was served as application/octet-stream.
+mimetypes.add_type("image/webp", ".webp")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

@@ -308,6 +308,7 @@ export function DevicesPage() {
   const closeUsers = () => {
     usersReq.current += 1;
     stopReloadTimer();
+    setUserSearch("");
     setReaderStatus(null);
     setSelectedDeviceId(null);
     setDeviceUsers([]);
@@ -316,6 +317,15 @@ export function DevicesPage() {
     setUsersMode("");
     setRefreshingUsers(false);
   };
+
+  // Search inside the Users panel: name, HR Employee Code or Face ID (Code).
+  const [userSearch, setUserSearch] = useState("");
+  const shownUsers = (() => {
+    const q = userSearch.trim().toLowerCase();
+    if (!q) return deviceUsers;
+    return deviceUsers.filter((u: any) => [u.EmployeeName, u.StringCode, u.EmployeeCode]
+      .some((v) => v != null && String(v).toLowerCase().includes(q)));
+  })();
 
   // What the server knows about a push reader: last poll, users on record, last refresh (explains an empty list).
   const [readerStatus, setReaderStatus] = useState<any>(null);
@@ -336,6 +346,7 @@ export function DevicesPage() {
     usersReq.current += 1;
     const req = usersReq.current;
     stopReloadTimer();
+    setUserSearch("");
     setSelectedDeviceId(deviceId);
     setDeviceUsers([]);
     setUsersStatus("");
@@ -775,12 +786,28 @@ export function DevicesPage() {
             );
           })()}
           {deviceUsers.length > 0 && (
+            <div className="dev-users-search">
+              <svg className="dev-users-search-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" />
+              </svg>
+              <input type="search" value={userSearch} onChange={(e) => setUserSearch(e.target.value)}
+                placeholder="Search by name, Employee Code or Code (Face ID)…" aria-label="Search users on this device" />
+              <span className="dev-users-search-count">
+                {userSearch.trim() ? `${shownUsers.length} of ${deviceUsers.length}` : `${deviceUsers.length} users`}
+              </span>
+            </div>
+          )}
+          {deviceUsers.length > 0 && shownUsers.length === 0 && (
+            <p className="dev-users-status">No user on this device matches “{userSearch.trim()}”.</p>
+          )}
+          {shownUsers.length > 0 && (
             <table className="table cfg-table">
-              <thead><tr><th>Code</th><th>Name</th><th>Role</th><th>Enabled</th><th>Face</th><th>Fingers</th><th>Photo</th><th /></tr></thead>
+              <thead><tr><th>Code</th><th>Employee Code</th><th>Name</th><th>Role</th><th>Enabled</th><th>Face</th><th>Fingers</th><th>Photo</th><th /></tr></thead>
               <tbody>
-                {deviceUsers.map((user) => (
+                {shownUsers.map((user) => (
                   <tr key={`${selectedDeviceId}-${user.EmployeeCode}`}>
                     <td>{user.EmployeeCode}</td>
+                    <td>{user.StringCode && user.StringCode !== user.EmployeeCode ? user.StringCode : "—"}</td>
                     <td>{user.EmployeeName || "—"}</td>
                     <td>{user.Role || "—"}</td>
                     <td>{user.Enabled === true ? <span className="badge badge-green">Yes</span> : user.Enabled === false ? <span className="badge badge-gray">No</span> : "—"}</td>
