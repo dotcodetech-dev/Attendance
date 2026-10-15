@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
+from app.services.campus_scope import check_employee_code
 from app.database import get_db
 from app.schemas.manual_entry import ManualEntryCreate, ManualEntryOut, ManualEntryUpdate
 from app.services.manual_entry_service import ManualEntryService
@@ -35,8 +36,10 @@ def list_my_manual_entries(
 def apply_manual_entry(
     payload: ManualEntryCreate,
     service: ManualEntryService = Depends(_get_manual_entry_service),
-    _user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
 ) -> ManualEntryOut:
+    check_employee_code(db, user, payload.EmployeeCode)
     return service.apply(payload)
 
 
@@ -45,8 +48,10 @@ def update_manual_entry(
     manual_entry_id: int,
     payload: ManualEntryUpdate,
     service: ManualEntryService = Depends(_get_manual_entry_service),
-    _user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
 ) -> ManualEntryOut:
+    _check_entry(db, user, manual_entry_id)
     return service.update(manual_entry_id, payload)
 
 
@@ -54,6 +59,16 @@ def update_manual_entry(
 def delete_manual_entry(
     manual_entry_id: int,
     service: ManualEntryService = Depends(_get_manual_entry_service),
-    _user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
 ) -> dict[str, bool]:
+    _check_entry(db, user, manual_entry_id)
     return service.delete(manual_entry_id)
+
+
+def _check_entry(db: Session, user, manual_entry_id: int) -> None:
+    """A campus login may only change entries of its own institution's staff."""
+    from app.models.entities import ManualEntry
+    row = db.get(ManualEntry, manual_entry_id)
+    if row is not None:
+        check_employee_code(db, user, row.EmployeeCode)

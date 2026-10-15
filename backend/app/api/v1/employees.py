@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
+from app.services.campus_scope import check_device_id, check_employee_id, deny_for_campus, user_org_id
 from app.database import get_db
 from app.schemas.employee import (
     EmployeeBiometricCreate,
@@ -61,9 +62,12 @@ def _parse_mapping(mapping: str) -> tuple[dict[str, int], int]:
 @router.get("", response_model=list[EmployeeOut])
 def list_employees(
     service: EmployeeService = Depends(_get_employee_service),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     rows = service.list_all()
+    org = user_org_id(service._session, user)
+    if org is not None:   # campus login: only its institution's staff
+        rows = [r for r in rows if r.OrganizationId == org]
     shifts = current_shift_map(service._session, [r.EmployeeCode for r in rows])
     out = []
     for r in rows:
@@ -79,8 +83,11 @@ def list_employees(
 def create_employee(
     payload: EmployeeCreate,
     service: EmployeeService = Depends(_get_employee_service),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
+    org = user_org_id(service._session, user)
+    if org is not None:
+        payload.OrganizationId = org   # a campus login adds staff to its own institution only
     return service.create(payload)
 
 
@@ -89,26 +96,30 @@ class CodesIn(BaseModel):
 
 
 @router.get("/blocked-pins")
-def list_blocked_pins(db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def list_blocked_pins(db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Face IDs of deleted people; readers may still send them but no staff record is created."""
+    deny_for_campus(db, user, "The blocked-ID list")
     return employee_delete.list_blocked(db)
 
 
 @router.delete("/blocked-pins/{pin}")
-def allow_pin_again(pin: str, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def allow_pin_again(pin: str, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    deny_for_campus(db, user, "The blocked-ID list")
     removed = employee_delete.unblock_pin(db, pin)
     db.commit()
     return {"removed": removed}
 
 
 @router.get("/student-duplicates")
-def list_student_duplicates(db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def list_student_duplicates(db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Staff records that are really students (same ID), for review before a bulk delete."""
+    deny_for_campus(db, user, "Clean up student records")
     return employee_delete.student_duplicates(db)
 
 
 @router.post("/student-duplicates/delete")
-def delete_student_duplicates(payload: CodesIn, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def delete_student_duplicates(payload: CodesIn, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    deny_for_campus(db, user, "Clean up student records")
     return employee_delete.delete_student_duplicates(db, payload.codes)
 
 
@@ -131,8 +142,11 @@ def update_employee(
     employee_id: int,
     payload: EmployeeUpdate,
     service: EmployeeService = Depends(_get_employee_service),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
+    org = user_org_id(service._session, user)
+    if org is not None:
+        payload.OrganizationId = org   # a campus login cannot move staff to another institution
     return service.update(employee_id, payload)
 
 
@@ -200,8 +214,9 @@ def download_import_template(_user=Depends(get_current_user)):
 async def inspect_import(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
+    deny_for_campus(db, user, "Import from Excel")   # an import can name any institution
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -213,8 +228,9 @@ async def preview_import(
     file: UploadFile = File(...),
     mapping: str = Form(...),
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
+    deny_for_campus(db, user, "Import from Excel")
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -227,8 +243,9 @@ async def commit_import(
     file: UploadFile = File(...),
     mapping: str = Form(...),
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
+    deny_for_campus(db, user, "Import from Excel")
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -250,8 +267,14 @@ def change_employee_code(
 def move_employees(
     payload: EmployeeMoveRequest,
     service: EmployeeService = Depends(_get_employee_service),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
+    db = service._session
+    org = user_org_id(db, user)
+    if org is not None:
+        for eid in payload.employee_ids:
+            check_employee_id(db, user, eid)
+        payload.OrganizationId = org   # department / school moves only, within the campus
     return service.move(payload)
 
 
@@ -260,6 +283,11 @@ def transfer_to_devices(
     employee_ids: list[int],
     target_device_ids: list[int],
     service: EmployeeService = Depends(_get_employee_service),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
+    db = service._session
+    for eid in employee_ids:
+        check_employee_id(db, user, eid)
+    for did in target_device_ids:
+        check_device_id(db, user, did)
     return service.transfer_to_devices(employee_ids, target_device_ids)

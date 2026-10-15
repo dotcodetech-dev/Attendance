@@ -9,6 +9,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
+from app.services.campus_scope import check_employee_code, deny_for_campus, user_org_id
 from app.database import get_db
 from app.models.entities import AttendanceProcessed, DeviceLog, Employee
 from app.schemas.attendance import AttendanceLogOut
@@ -37,9 +38,13 @@ def get_logs(
     to_date: Optional[datetime] = None,
     limit: int = 200,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     query = db.query(DeviceLog)
+    org = user_org_id(db, user)
+    if org is not None:   # campus login: punches of its institution's staff only
+        query = query.filter(DeviceLog.EmployeeCode.in_(
+            db.query(Employee.EmployeeCode).filter(Employee.OrganizationId == org)))
     if device_id is not None:
         query = query.filter(DeviceLog.DeviceId == device_id)
     if employee_code:
@@ -179,8 +184,9 @@ def repair_punches(
     from_date: date = Query(...),
     to_date: Optional[date] = Query(default=None),
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
+    deny_for_campus(db, user, "Repairing stored punches (all institutions)")
     """Apply the punch rule to punches already stored: delete repeats inside the
     duplicate window, re-number IN/OUT per employee-day, then recalculate attendance."""
     from app.services.punch_rules import repair_stored_punches
@@ -233,8 +239,9 @@ def late_review(
 def recalculate_attendance(
     payload: RecalculateRequest,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
+    check_employee_code(db, user, payload.employee_code)   # campus login: only its own staff
     """
     Recompute materialized daily attendance for a date range (all employees, or
     one if employee_code is given). Idempotent. This is what the nightly
@@ -260,7 +267,7 @@ def get_processed_attendance(
     status: Optional[str] = None,
     limit: int = 2000,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     """Fast read of pre-computed daily attendance (for reports/exports)."""
     query = (
@@ -268,6 +275,10 @@ def get_processed_attendance(
         .filter(AttendanceProcessed.AttendanceDate >= from_date)
         .filter(AttendanceProcessed.AttendanceDate <= to_date)
     )
+    org = user_org_id(db, user)
+    if org is not None:   # campus login: its institution's staff only
+        query = query.filter(AttendanceProcessed.EmployeeCode.in_(
+            db.query(Employee.EmployeeCode).filter(Employee.OrganizationId == org)))
     if employee_code:
         query = query.filter(AttendanceProcessed.EmployeeCode == employee_code)
     if status:
@@ -302,9 +313,11 @@ def download_processed_csv(
     to_date: date,
     employee_code: Optional[str] = None,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     """Download the computed daily attendance for a range as a CSV file."""
+    if not employee_code:
+        deny_for_campus(db, user, "The all-staff attendance CSV")   # use the reports (limited to the campus)
     if to_date < from_date:
         raise HTTPException(400, "to_date must be on or after from_date.")
     csv_text, _ = build_attendance_csv(db, from_date, to_date, employee_code)
@@ -320,8 +333,9 @@ def download_processed_csv(
 def export_processed_attendance(
     payload: RecalculateRequest,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
+    deny_for_campus(db, user, "The attendance export to folder / FTP")
     """
     Deliver computed attendance for a range to the configured targets
     (local folder and/or FTP). Reads from attendance_processed — run

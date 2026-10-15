@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
+from app.services.campus_scope import check_employee_code
 from app.database import get_db
 from app.schemas.leave_balance import LeaveBalanceOut
 from app.schemas.leave_request import LeaveRequestCreate, LeaveRequestOut
@@ -60,6 +61,28 @@ def list_my_leaves(
 def apply_leave(
     payload: LeaveRequestCreate,
     service: LeaveRequestService = Depends(_get_leave_request_service),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ) -> LeaveRequestOut:
+    check_employee_code(service._session, user, payload.EmployeeCode)
     return service.apply_leave(payload)
+
+
+@router.post("/admin-entry", response_model=LeaveRequestOut, status_code=201)
+def admin_leave_entry(
+    payload: LeaveRequestCreate,
+    service: LeaveRequestService = Depends(_get_leave_request_service),
+    user=Depends(get_current_user),
+) -> LeaveRequestOut:
+    """Admin enters a leave for an employee: saved as Approved straight away, no approval steps."""
+    check_employee_code(service._session, user, payload.EmployeeCode)   # campus login: its own staff only
+    return service.admin_entry(payload, user)
+
+
+@router.post("/{leave_request_id}/cancel", response_model=LeaveRequestOut)
+def admin_cancel_leave(
+    leave_request_id: int,
+    service: LeaveRequestService = Depends(_get_leave_request_service),
+    user=Depends(get_current_user),
+) -> LeaveRequestOut:
+    """Admin undoes a leave (e.g. entered by mistake); its days return to the balance."""
+    return service.admin_cancel(leave_request_id, user)

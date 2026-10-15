@@ -6,6 +6,9 @@ Status of a LeaveRequest:
   HodApproved  waiting for the Principal / Director
   Approved     final; this is the only status that turns days into Leave in attendance
   Rejected     declined at either step (a reason is required)
+  Cancelled    undone by an admin (e.g. entered by mistake)
+
+An admin can also enter a leave directly (Leave Entry): it is saved as Approved with no steps.
 
 Who can act is decided by the login's role and the employee it is linked to:
   Manager (HOD)          only leaves of employees in the SAME department as their own employee record
@@ -30,6 +33,7 @@ PENDING = "Pending"
 HOD_APPROVED = "HodApproved"
 APPROVED = "Approved"
 REJECTED = "Rejected"
+CANCELLED = "Cancelled"   # undone by an admin; kept for the record, frees the balance
 OPEN_STATUSES = (PENDING, HOD_APPROVED)
 RESERVING_STATUSES = (PENDING, HOD_APPROVED, APPROVED)  # count against the balance while undecided
 

@@ -5,8 +5,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
+from app.services.campus_scope import check_device_id, check_transfer, user_org_id
 from app.database import get_db
-from app.models.entities import DeviceCommand, DeviceEmployee, Employee, EmployeeBio
+from app.models.entities import Device, DeviceCommand, DeviceEmployee, Employee, EmployeeBio
 from app.schemas.command import DeviceCommandCreate, DeviceCommandOut, TransferRequest
 
 router = APIRouter()
@@ -24,12 +25,17 @@ COMMAND_MAP = {
 
 
 @router.get("", response_model=list[DeviceCommandOut])
-def list_commands(db: Session = Depends(get_db), _user=Depends(get_current_user)):
-    return db.query(DeviceCommand).order_by(DeviceCommand.DeviceCommandId.desc()).all()
+def list_commands(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    q = db.query(DeviceCommand)
+    org = user_org_id(db, user)
+    if org is not None:   # campus login: commands of its institution's readers only
+        q = q.filter(DeviceCommand.DeviceId.in_(db.query(Device.DeviceId).filter(Device.OrganizationId == org)))
+    return q.order_by(DeviceCommand.DeviceCommandId.desc()).all()
 
 
 @router.post("", response_model=DeviceCommandOut)
-def create_command(payload: DeviceCommandCreate, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def create_command(payload: DeviceCommandCreate, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    check_device_id(db, user, payload.DeviceId)
     command_text = COMMAND_MAP.get(payload.command, payload.command)
     if payload.payload:
         command_text = f"{command_text} {payload.payload}".strip()
@@ -49,7 +55,8 @@ def create_command(payload: DeviceCommandCreate, db: Session = Depends(get_db), 
 
 
 @router.post("/transfer")
-def transfer_biometric_users(payload: TransferRequest, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def transfer_biometric_users(payload: TransferRequest, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    check_transfer(db, user, payload)
     queued = 0
     for employee_id in payload.employee_ids:
         employee = db.query(Employee).filter(Employee.EmployeeId == employee_id).first()

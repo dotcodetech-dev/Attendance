@@ -12,7 +12,7 @@ export function MusterLeavePage() {
       reportKey="muster-leave"
       musterPrint="leave"
       title="Attendance Report (Time & Leave)"
-      description="Daily In / Out / worked-hours muster with per-employee leave totals for the range."
+      description="Daily In / Out muster with per-employee leave totals for the range."
       getFn={api.getMusterLeave}
       minWidth={1200}
       subtitle={(d) => `From ${d.FromLabel} To ${d.ToLabel}   ·   Category : ${d.Category}`}

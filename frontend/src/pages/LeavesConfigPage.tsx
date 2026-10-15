@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
 import { ConfigModal, Flash, NumField, SectionHead, Segmented, SwitchRow } from "../components/ConfigUi";
+import { EmployeeSearch } from "../components/EmployeeSelect";
 import { Req } from "../components/Req";
 import { Icons } from "../components/SidebarIcons";
 
@@ -245,7 +246,7 @@ function EmployeeBalanceEditor() {
   const empName = useMemo(() => employees.find((e) => e.EmployeeCode === employeeCode)?.EmployeeName, [employees, employeeCode]);
 
   const load = async () => {
-    if (!employeeCode.trim()) { setStatus({ text: "Choose an employee first.", ok: false }); return; }
+    if (!employeeCode.trim()) { setStatus({ text: "Search and pick an employee first.", ok: false }); return; }
     setLoading(true); setStatus(null);
     try {
       setBalances(await api.getEmployeeLeaveBalance(employeeCode.trim(), year));
@@ -290,10 +291,8 @@ function EmployeeBalanceEditor() {
       <div className="hours-row" style={{ marginBottom: 12 }}>
         <div style={{ flex: "1 1 260px", minWidth: 0 }}>
           <label className="field-label" htmlFor="lb-emp">Employee</label>
-          <select id="lb-emp" style={{ width: "100%" }} value={employeeCode} onChange={(e) => { setEmployeeCode(e.target.value); setBalances([]); }}>
-            <option value="">Select employee…</option>
-            {employees.map((e) => <option key={e.EmployeeId} value={e.EmployeeCode}>{e.EmployeeName} ({e.EmployeeCode})</option>)}
-          </select>
+          <EmployeeSearch id="lb-emp" employees={employees} value={employeeCode}
+            onChange={(code) => { setEmployeeCode(code); setBalances([]); }} style={{ width: "100%" }} />
         </div>
         <div>
           <label className="field-label" htmlFor="lb-year">Year</label>

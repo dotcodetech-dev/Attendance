@@ -49,7 +49,8 @@ SAMPLE_COUNT = 3
 _ALIASES: dict[str, set[str]] = {
     "EmployeeCode": {"employeeno", "employeecode", "empno", "empcode", "code", "employeeid", "userid", "faceid", "deviceid", "biometricid"},
     "HrCode": {"hrcode", "hrno", "hremployeecode", "employeenumber", "staffno", "staffcode"},
-    "ShortNo": {"shortno", "shortnumber", "shortcode", "shortid", "shortnum"},
+    # Shown as "Sort No" (the office's ordering number); older sheets say "Short No".
+    "ShortNo": {"sortno", "sortnumber", "sortorder", "shortno", "shortnumber", "shortcode", "shortid", "shortnum"},
     "EmployeeName": {"employeename", "name", "empname", "fullname"},
     "EmployeeRFIDNumber": {"accesscardno", "cardno", "rfid", "rfidno", "accesscard", "cardnumber"},
     "DateOfBirth": {"dob", "dateofbirth", "birthdate"},
@@ -272,6 +273,7 @@ class EmployeeImportService:
         existing_codes = {e.EmployeeCode for e in self._session.query(Employee.EmployeeCode).all()}
         max_numeric = self._session.query(Employee.NumericCode).order_by(Employee.NumericCode.desc()).first()
         next_numeric = (max_numeric[0] if max_numeric and max_numeric[0] else 0)
+        renamed: list[Employee] = []   # existing people whose name this import changes
 
         # RFID must be unique across employees ('' and '0' mean "no card"). Seed the
         # owner map from the DB, then claim numbers row-by-row so duplicates inside the
@@ -406,6 +408,8 @@ class EmployeeImportService:
                 self._session.add(emp)
                 existing_codes.add(code)
             else:
+                if commit and name and emp.EmployeeName != name:
+                    renamed.append(emp)   # sent to the readers this person is on, after the save
                 emp.EmployeeName = name
                 if status:
                     emp.CurrentStatus = status
@@ -441,6 +445,15 @@ class EmployeeImportService:
             except Exception as exc:  # pragma: no cover - surfaced to the UI
                 self._session.rollback()
                 raise exc
+            if renamed:
+                # New names go to the readers these people are on; the import itself is already saved.
+                from app.services.push_channel import queue_name_change
+                try:
+                    for emp in renamed:
+                        queue_name_change(self._session, emp)
+                    self._session.commit()
+                except Exception:  # noqa: BLE001 - readers can still be updated with Send names
+                    self._session.rollback()
 
         result.masters_created = masters
         return result

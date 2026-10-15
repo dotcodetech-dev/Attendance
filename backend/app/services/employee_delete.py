@@ -22,7 +22,7 @@ from app.models.entities import (
     EmployeeLeaveBalance, EmployeePhoto, LeaveRequest, ManualEntry, ShiftRoster, Student, User,
 )
 from app.services.device_sdk import delete_device_user
-from app.services.push_channel import is_push_online, push_delete_user, sdk_reachable
+from app.services.push_channel import push_delete_user, queued_note, reader_channel
 
 
 # ------------------------------------------------------------------ who may NOT become an employee
@@ -101,10 +101,11 @@ def delete_employee(db: Session, employee: Employee, remove_from_readers: bool =
     reader_notes: list[str] = []
     if remove_from_readers:
         for dev in _readers_holding(db, employee):
-            if is_push_online(dev):
+            channel = reader_channel(dev)            # AI readers: always push (queued until they poll)
+            if channel == "push":
                 push_delete_user(db, dev, code)      # queues the reader's delete command (and drops the mapping)
-                reader_notes.append(f"{dev.DeviceName}: delete queued, the reader removes the person on its next poll")
-            elif sdk_reachable(dev):
+                reader_notes.append(f"{dev.DeviceName}: delete queued; {queued_note(dev)}")
+            elif channel == "sdk":
                 r = delete_device_user(dev.DeviceIPAddress, code, comm_key=dev.CommKey)
                 reader_notes.append(f"{dev.DeviceName}: " + ("removed over the SDK" if r.get("deleted") or r.get("connected") else f"SDK delete failed: {r.get('message')}"))
             else:

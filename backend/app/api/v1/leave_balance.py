@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
+from app.services.campus_scope import check_employee_code, deny_for_campus
 from app.database import get_db
 from app.models.entities import Employee, EmployeeLeaveBalance, LeaveConfig
 from app.schemas.employee_leave_balance import (
@@ -59,9 +60,10 @@ def get_employee_balances(
 def set_employee_balance(
     payload: EmployeeLeaveBalanceSet,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     """Set/override an employee's entitlement for one leave type + year."""
+    check_employee_code(db, user, payload.EmployeeCode)
     employee = db.query(Employee).filter(Employee.EmployeeCode == payload.EmployeeCode).first()
     if not employee:
         raise HTTPException(404, "Employee not found")
@@ -104,8 +106,9 @@ def seed_balances(
     year: int = Query(...),
     overwrite: bool = Query(default=False),
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
+    deny_for_campus(db, user, "Setting up every employee's balances")
     """
     Initialise per-employee balances for a year from each leave type's MaxPerYear.
     Skips employee/type rows that already exist unless overwrite=true.

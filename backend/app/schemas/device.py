@@ -16,6 +16,7 @@ class DeviceBase(BaseModel):
     IsAttendanceDevice: Optional[str] = None
     LocationId: Optional[int] = None
     CommKey: Optional[int] = None
+    OrganizationId: Optional[int] = None   # institution (campus-role logins see only theirs)
 
 
 class DeviceCreate(DeviceBase):
@@ -32,6 +33,7 @@ class DeviceUpdate(BaseModel):
     IsAttendanceDevice: Optional[str] = None
     LocationId: Optional[int] = None
     CommKey: Optional[int] = None
+    OrganizationId: Optional[int] = None
 
 
 class DeviceOut(DeviceBase):

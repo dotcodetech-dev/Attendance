@@ -1388,6 +1388,9 @@ button:disabled {
   font-size: 12px;
   font-weight: 600;
 }
+/* Institution tag on a device card (who can see it under a campus role). */
+.device-type-badge.dev-org-badge { background: #ecfdf5; color: #065f46; margin-left: 6px; max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .device-mgmt-action-btn.ghost {
   background: #f1f5f9;
   color: #475569;
@@ -3426,6 +3429,16 @@ label > span > .req, .field-label > .req { margin-left: 3px; }
 .roles-count { font-size: 14px; color: var(--ink-soft); }
 .roles-count b { font-size: 18px; color: var(--ink); }
 .roles-blurb { margin: 10px 0 18px; color: var(--text-muted); font-size: 14px; }
+/* Campus roles (limited to one institution) sit next to the built-in role tabs. */
+.roles-campus-tab, .roles-campus-new { display: inline-flex; flex-direction: column; align-items: flex-start; justify-content: center;
+  min-height: 44px; padding: 6px 14px; border-radius: 12px; border: 1.5px solid var(--line, #e1deee); background: #fff;
+  font: inherit; font-size: 14px; font-weight: 600; color: var(--text, #1f2544); cursor: pointer; line-height: 1.2; }
+.roles-campus-tab small { font-size: 11.5px; font-weight: 500; color: var(--text-muted); max-width: 220px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.roles-campus-tab.is-on { border-color: var(--primary, #6d4aff); background: var(--primary-soft, #efeafe); color: var(--primary-strong, #4a32c9); }
+.roles-campus-new { border-style: dashed; color: var(--primary, #6d4aff); }
+.roles-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 14px; font-size: 13.5px; color: var(--text-muted); }
+.roles-campus-new.is-on { background: var(--primary-soft, #efeafe); }
 .roles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 20px; align-items: start; }
 .roles-card { margin-bottom: 0; }
 .roles-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
@@ -3563,6 +3576,14 @@ label > span > .req, .field-label > .req { margin-left: 3px; }
 .dev-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .dev-panel-head h3 { margin: 0; font-size: 20px; font-weight: 800; }
 .dev-users-status { margin: 0; padding: 14px 20px; color: var(--ink-soft); font-size: 14px; }
+/* "Reader last polled …" line in the Users panel: green while the reader polls, amber when it has gone quiet. */
+.dev-reader-poll { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px; margin: 0; padding: 10px 20px;
+  font-size: 13.5px; line-height: 1.5; border-bottom: 1px solid var(--line, #e6e8f0); }
+.dev-reader-poll i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; flex: none; align-self: center; }
+.dev-reader-poll.is-ok { color: #1e6b4f; background: #f1faf6; }
+.dev-reader-poll.is-ok i { background: #2f9e72; }
+.dev-reader-poll.is-quiet { color: #7a4a06; background: #fff7ea; }
+.dev-reader-poll.is-quiet i { background: #e08a12; }
 
 /* Attendance rules */
 .lr-body.is-off { opacity: .5; pointer-events: none; }
@@ -3629,6 +3650,107 @@ label > span > .req, .field-label > .req { margin-left: 3px; }
 /* Login page header */
 .login-page-header { text-align: center; margin-bottom: 20px; }
 .login-page-header h1 { margin: 4px 0 0; font-size: 1.5rem; font-weight: 800; color: var(--text, #1f2544); letter-spacing: -0.01em; }
+/* ---- Login page: one centred card in the brand colours of the Dotcode / Code Easy logo:
+   navy (#001860, "DOT") for actions and text, gold (#F8B000, "CODE") for accents only - gold text on
+   white would be too faint to read. Mild navy / gold tints make the background. ---- */
+.lp {
+  --lp-ink: #13204A; --lp-ink-2: #23305C; --lp-muted: #545C78; --lp-icon: #6B7391;
+  --lp-accent: #0E2167; --lp-accent-ink: #0E2167; --lp-accent-soft: #E7EBF7; --lp-ring: #FCE6A8;
+  --lp-gold: #F8B000; --lp-line: #DCE0EC; --lp-field: #F8F9FC; --lp-ground: #F6F7FB;
+  position: relative; min-height: 100vh; box-sizing: border-box; overflow: hidden;
+  display: flex; align-items: center; justify-content: center; padding: 48px 16px;
+  background: var(--lp-ground); color: var(--lp-ink);
+  font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+}
+.lp-deco { position: absolute; inset: 0; pointer-events: none; }
+.lp-shape, .lp-pixel { position: absolute; display: block; }
+.lp-shape--mint     { width: 460px; height: 460px; border-radius: 50%; background: #E3E8F6; top: -170px; left: -140px; }
+.lp-shape--peach    { width: 380px; height: 380px; border-radius: 44% 56% 52% 48%; background: #FDEFCB; bottom: -150px; right: -110px; }
+.lp-shape--lavender { width: 230px; height: 230px; border-radius: 50%; background: #ECEFF9; top: 9%; right: 7%; }
+.lp-shape--sky      { width: 170px; height: 170px; border-radius: 36px; background: #FEF5DC; bottom: 10%; left: 6%; transform: rotate(14deg); }
+.lp-shape--butter   { width: 96px; height: 96px; border-radius: 50%; background: #E3E8F6; top: 58%; right: 22%; }
+/* The logo's "pixel" squares, in its own navy and gold. */
+.lp-pixel--1 { width: 16px; height: 16px; border-radius: 3px; background: #0E2167; top: 18%; left: 23%; }
+.lp-pixel--2 { width: 11px; height: 11px; border-radius: 2px; background: #F8B000; top: 23%; left: 26%; }
+.lp-pixel--3 { width: 13px; height: 13px; border-radius: 3px; background: #F8B000; top: 72%; right: 30%; }
+.lp-pixel--4 { width: 9px;  height: 9px;  border-radius: 2px; background: #0E2167; top: 77%; right: 27%; }
+.lp-pixel--5 { width: 12px; height: 12px; border-radius: 2px; background: #3B4E9C; top: 31%; right: 18%; }
+.lp-pixel--6 { width: 8px;  height: 8px;  border-radius: 2px; background: #F8B000; top: 64%; left: 17%; }
+
+.lp-main { position: relative; width: 100%; max-width: 440px; display: flex; flex-direction: column; align-items: center; gap: 22px; }
+
+.lp-alert { width: 100%; box-sizing: border-box; padding: 12px 16px; border-radius: 14px; background: #FFF4E5; border: 1px solid #F5D3A6; color: #6B3E06; font-size: 14px; line-height: 1.5; }
+.lp-alert-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 8px; }
+.lp-alert-actions a { color: #8A4B05; font-weight: 600; }
+.lp-alert-actions button { min-height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid #E3B272; background: #FFFFFF; color: #6B3E06; font: inherit; font-weight: 600; cursor: pointer; }
+.lp-alert-actions button:disabled { opacity: 0.6; cursor: default; }
+
+.lp-card { width: 100%; background: #FFFFFF; border-radius: 24px; overflow: hidden;
+  box-shadow: 0 1px 2px rgba(19, 32, 74, 0.06), 0 24px 56px -20px rgba(14, 33, 103, 0.30); }
+.lp-card-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); height: 6px; }
+.lp-card-strip span:nth-child(-n+3) { background: #0E2167; }   /* navy ... */
+.lp-card-strip span:nth-child(4) { background: #F8B000; }      /* ... and a gold end, like the logo */
+.lp-card-body { padding: 36px 36px 32px; display: flex; flex-direction: column; gap: 24px; }
+
+.lp-head { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.lp-mark { width: 60px; height: 60px; border-radius: 18px; background: var(--lp-accent-soft); color: var(--lp-accent-ink);
+  display: flex; align-items: center; justify-content: center; margin-bottom: 14px; }
+.lp-eyebrow { margin: 0 0 6px; max-width: 320px; font-size: 13px; font-weight: 700; letter-spacing: 0.04em; line-height: 1.4; color: var(--lp-accent-ink); }
+.lp-eyebrow b { color: #A26F00; }   /* "Easy" in a deep gold that still reads on white */
+.lp-title { margin: 0 0 6px; font-size: 30px; line-height: 1.15; font-weight: 800; letter-spacing: -0.02em; color: var(--lp-ink); }
+.lp-sub { margin: 0; font-size: 15px; line-height: 1.5; color: var(--lp-muted); }
+
+.lp-form { display: flex; flex-direction: column; gap: 18px; }
+.lp-field { display: flex; flex-direction: column; gap: 8px; }
+.lp-field label { font-size: 14px; font-weight: 600; color: var(--lp-ink-2); }
+.lp-input-wrap { position: relative; }
+.lp-input-icon { position: absolute; left: 16px; top: 15px; color: var(--lp-icon); pointer-events: none; }
+/* :not(#lp-none) (matches every input) lifts these above the app-wide `input:not([type=…])…` control rule,
+   which otherwise resets the padding and the icon sits on the text. */
+.lp-input:not(#lp-none) { width: 100%; box-sizing: border-box; height: 48px; padding: 0 16px 0 46px; border: 1.5px solid var(--lp-line);
+  border-radius: 14px; background: var(--lp-field); font: inherit; font-size: 15px; color: var(--lp-ink);
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s; }
+.lp-input--pw:not(#lp-none) { padding-right: 52px; }
+.lp-input::placeholder { color: #8E92AA; }
+.lp-input:not(#lp-none):focus { outline: none; border-color: #0E2167; box-shadow: 0 0 0 4px var(--lp-ring); background: #FFFFFF; }
+.lp-eye { position: absolute; right: 2px; top: 2px; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 12px;
+  background: transparent; color: var(--lp-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.lp-eye:hover { color: var(--lp-ink); background: #EEF1F9; }
+
+.lp-error { margin: 0; padding: 10px 12px; border-radius: 12px; background: #FDECEC; border: 1px solid #F3C4C4; color: #9B1C1C; font-size: 14px; line-height: 1.45; }
+
+.lp-submit { margin-top: 6px; height: 50px; border: 0; border-radius: 14px; background: var(--lp-accent); color: #FFFFFF;
+  font: inherit; font-size: 16px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px;
+  box-shadow: 0 10px 22px -10px rgba(14, 33, 103, 0.65); transition: background 0.15s, transform 0.15s; }
+.lp-submit:hover:not(:disabled) { background: #091650; }
+.lp-submit:active:not(:disabled) { transform: translateY(1px); }
+.lp-submit:disabled { opacity: 0.6; cursor: not-allowed; box-shadow: none; }
+.lp-eye:focus-visible, .lp-submit:focus-visible, .lp-support-links a:focus-visible, .lp-alert-actions button:focus-visible {
+  outline: 3px solid #F8B000; outline-offset: 2px; }
+
+.lp-support { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+/* The logo is opaque on white: a white badge keeps its edges clean and the background decoration out of it. */
+.lp-support-badge { display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; border-radius: 16px;
+  background: #FFFFFF; border: 1px solid #E6E3F3; box-shadow: 0 6px 18px -12px rgba(14, 33, 103, 0.35); }
+.lp-support-logo { display: block; height: 44px; width: auto; max-width: 100%; }
+.lp-support-title { margin: 0; font-size: 13px; font-weight: 600; color: #4C5170; }
+.lp-support-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.lp-support-links a { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border-radius: 999px;
+  background: #FFFFFF; border: 1px solid #E6E3F3; color: var(--lp-accent-ink); font-size: 14px; font-weight: 600; text-decoration: none; }
+.lp-support-links a:hover { color: #091650; border-color: #F8B000; }
+
+@media (max-width: 480px) {
+  .lp { padding: 32px 16px; }
+  .lp-card-body { padding: 28px 22px 24px; gap: 20px; }
+  .lp-title { font-size: 26px; }
+  .lp-input:not(#lp-none) { font-size: 16px; } /* 16px stops phones zooming into the field */
+  .lp-shape--mint { width: 260px; height: 260px; top: -110px; left: -90px; }
+  .lp-shape--peach { width: 220px; height: 220px; bottom: -90px; right: -80px; }
+  .lp-shape--lavender { width: 120px; height: 120px; top: 40px; right: -30px; }
+  .lp-shape--sky { width: 90px; height: 90px; bottom: 70px; left: -26px; }
+  .lp-shape--butter, .lp-pixel--3, .lp-pixel--4, .lp-pixel--5, .lp-pixel--6 { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .lp-input, .lp-submit { transition: none; } }
 .login-page-header-brand { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--primary, #6d4aff); }
 
 /* ---- Department-wise report grouping (Present/Absent, Register, Leave Balance) ---- */

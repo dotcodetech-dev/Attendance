@@ -8,16 +8,16 @@ export function EmployeeListPage() {
     <RangeReportPage
       reportKey="employee-list"
       title="Employee List"
-      description="Master list of employees with type, category, shift and status."
+      description="Master list of employees with type, category and status."
       getFn={api.getEmployeeList}
       withDateRange={false}
       minWidth={1000}
       subtitle={(d) => `${d.Count} employees   ·   Category : ${d.Category}   ·   as on ${d.GeneratedLabel}`}
-      colSpan={() => 10}
+      colSpan={() => 9}
       head={() => (
         <tr>
           <IdHead /><th>Department</th><th>Designation</th>
-          <th>Type</th><th>Category</th><th>Shift</th><th>Status</th><th>Joining Date</th>
+          <th>Type</th><th>Category</th><th>Status</th><th>Joining Date</th>
         </tr>
       )}
       row={() => (e: any) => (
@@ -27,7 +27,6 @@ export function EmployeeListPage() {
           <td>{e.Designation}</td>
           <td>{e.Type}</td>
           <td>{e.CategoryName}</td>
-          <td>{e.Shift}</td>
           <td>{e.Status}</td>
           <td>{e.JoiningDate}</td>
         </tr>

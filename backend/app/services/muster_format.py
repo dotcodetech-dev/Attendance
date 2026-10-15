@@ -4,7 +4,7 @@ PDF and Excel for the two college muster reports, laid out like the printed form
   Attendance (Time)           S.No | Employee No | Name | one column per day | Late Hrs
   Attendance (Time & Leave)   ... | one column per leave type, A, WO, P | Total | Late Hrs | Late Cl
 
-Each employee takes three lines (IN, OUT, worked hours), a department heading precedes its people and the S.No
+Each employee takes two lines (IN, OUT; worked hours are not shown), a department heading precedes its people and the S.No
 restarts at 1 in every department. Book Antiqua in Excel (as the form), Palatino in the PDF (the same design,
 and installed with Windows). Columns are shared with the on-screen report through data["Columns"] / row["Counts"].
 """
@@ -34,10 +34,10 @@ _HEAD = ["S.No", "Employee No", "Name"]
 
 # ------------------------------------------------------------------ model shared by PDF and Excel
 
-def _lines(cell: str) -> tuple[str, str, str]:
+def _lines(cell: str) -> tuple[str, str]:
     parts = (cell or "").split("\n")
-    parts += [""] * (3 - len(parts))
-    return parts[0], parts[1], parts[2]
+    parts += [""] * (2 - len(parts))
+    return parts[0], parts[1]
 
 
 _ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -59,7 +59,7 @@ def _model(data: dict, grouped: bool, with_leave: bool) -> dict:
         counts = [_fmt((e.get("Counts") or {}).get(c, 0)) for c in cols]
         tail = [_fmt(e["Total"]), _fmt(e["LateHrs"]), _fmt(e["LateCl"])] if with_leave else [_fmt(e["LateHrs"])]
         return {"sno": sno, "code": _fmt(e["EmployeeCode"]), "name": _fmt(e["EmployeeName"]),
-                "in": [d[0] for d in days], "out": [d[1] for d in days], "work": [d[2] for d in days],
+                "in": [d[0] for d in days], "out": [d[1] for d in days],
                 "counts": counts, "tail": tail}
 
     items: list[tuple[str, Any]] = []
@@ -184,15 +184,12 @@ def muster_pdf(data: dict, org: dict | None, with_leave: bool, grouped: bool = T
             p = val
             rows.append([str(p["sno"]), p["code"], p["name"]] + p["in"] + p["counts"] + p["tail"])
             rows.append([""] * 3 + p["out"] + [""] * (ncols - 3 - nd))
-            rows.append([""] * 3 + p["work"] + [""] * (ncols - 3 - nd))
             style += [
-                ("NOSPLIT", (0, i), (-1, i + 2)),
+                ("NOSPLIT", (0, i), (-1, i + 1)),
                 ("ALIGN", (0, i), (0, i), "CENTER"),
                 ("FONT", (1, i), (2, i), bold, f),
                 ("ALIGN", (2, i), (2, i), "CENTER"),
                 ("ALIGN", (3, i), (3 + nd - 1, i + 1), "RIGHT"),
-                ("FONT", (3, i + 2), (3 + nd - 1, i + 2), bold, f),
-                ("ALIGN", (3, i + 2), (3 + nd - 1, i + 2), "LEFT"),
             ]
             if nc:
                 style += [("FONT", (first_count, i), (first_tail - 1, i), bold, f),
@@ -204,7 +201,7 @@ def muster_pdf(data: dict, org: dict | None, with_leave: bool, grouped: bool = T
             else:
                 style.append(("ALIGN", (first_tail, i), (first_tail, i), "LEFT"))
             if pending_dept is not None:   # keep a department heading with its first person
-                style.append(("NOSPLIT", (0, pending_dept), (-1, i + 2)))
+                style.append(("NOSPLIT", (0, pending_dept), (-1, i + 1)))
                 pending_dept = None
 
     table = Table(rows, colWidths=widths, repeatRows=1, hAlign="CENTER")
@@ -296,7 +293,7 @@ def muster_xlsx(data: dict, org: dict | None, with_leave: bool, grouped: bool = 
             r += 1
         else:
             p = val
-            for k in range(3):
+            for k in range(2):
                 bordered(r + k)
             a = ws.cell(r, 1, p["sno"]); a.font, a.alignment = f11, Alignment(horizontal="center")
             b = ws.cell(r, 2, p["code"]); b.font, b.alignment = f11b, Alignment(horizontal="left")
@@ -308,8 +305,6 @@ def muster_xlsx(data: dict, org: dict | None, with_leave: bool, grouped: bool = 
                     if v:
                         c = ws.cell(r + k, col, clock(v)); c.number_format = "hh:mm"; c.font = f11
                         c.alignment = Alignment(horizontal="right")
-                if p["work"][d]:
-                    c = ws.cell(r + 2, col, p["work"][d]); c.font = f11b; c.alignment = Alignment(horizontal="left")
             for j, v in enumerate(p["counts"]):
                 c = ws.cell(r, first_count + j, float(v) if "." in v else int(v)); c.font = f11b
             tail = p["tail"]
@@ -319,7 +314,7 @@ def muster_xlsx(data: dict, org: dict | None, with_leave: bool, grouped: bool = 
                 lc = ws.cell(r, first_tail + 2, int(tail[2] or 0)); lc.font = f11
             else:
                 ws.cell(r, first_tail, tail[0] or None).font = f11
-            r += 3
+            r += 2
 
     widths = [6, 14, 26] + [7.5] * nd + [max(4.5, len(h) * 1.25 + 2) for h in m["headers"][first_count:first_tail]]
     widths += [7, 9, 8] if with_leave else [9]

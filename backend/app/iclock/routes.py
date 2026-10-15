@@ -12,14 +12,16 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models.entities import Device, DeviceCommand, DeviceLog, Employee, EmployeeBio, EmployeePhoto
+from app.models.entities import Device, DeviceCommand, DeviceEmployee, DeviceLog, Employee, EmployeeBio, EmployeePhoto
 from app.services import adms_log
 from app.services.bio_store import parse_finger_index, upsert_template
 from app.services.employee_delete import blocked_pins, not_a_staff_pin, student_codes
 from app.services.attendance_settings import get_punch_rule
 from app.services.iclock_parser import parse_attlog_lines, parse_operlog_lines, parse_photo_lines
 from app.services.punch_rules import assign_directions, day_keys, filter_new_punches
-from app.services.push_channel import note_user_on_device, propagate_template
+from app.services.push_channel import (
+    PRI_ADMIN, ROLE_DEVICE_ADMIN, ROLE_DEVICE_USER, note_user_on_device, propagate_template, restore_after_failed_delete,
+)
 from app.services.webhook import post_logs
 
 iclock_router = APIRouter()
@@ -102,17 +104,27 @@ def _decode_push_body(raw: bytes, content_encoding: Optional[str]) -> str:
     return raw.decode("utf-8", errors="ignore")
 
 
-def _user_data_line(code: str, db: Session, card_override: str | None = None) -> str:
+def _user_data_line(code: str, db: Session, card_override: str | None = None, device_id: int | None = None) -> str:
     """
     Build a production-eBioServer "DATA USER" line for one employee. This is
     the classic eSSL dialect (DATA USER / DATA FP), not the newer ZKTeco
     "DATA UPDATE USERINFO" dialect — eSSL firmwares in the field only reliably
     accept the classic form (verified against the compiled eBioServer library).
+    The privilege is the one the person has on THAT reader when it is known, so
+    re-sending a user (new name, transfer back) never removes a device admin.
     """
     emp = db.query(Employee).filter(Employee.EmployeeCode == code).first()
     name = (emp.EmployeeName if emp else None) or code
     card = card_override if card_override is not None else ((emp.EmployeeRFIDNumber if emp else None) or "")
-    pri = "14" if emp and (emp.Role or "").strip().lower() == "admin" else "0"
+    on_reader = None
+    if emp is not None and device_id is not None:
+        on_reader = (db.query(DeviceEmployee.Role)
+                     .filter(DeviceEmployee.DeviceId == device_id, DeviceEmployee.EmployeeId == emp.EmployeeId)
+                     .scalar())
+    if on_reader in (ROLE_DEVICE_ADMIN, ROLE_DEVICE_USER):
+        pri = PRI_ADMIN if on_reader == ROLE_DEVICE_ADMIN else "0"
+    else:
+        pri = PRI_ADMIN if emp and (emp.Role or "").strip().lower() == "admin" else "0"
     verify = "0"  # 0 = any of finger/face/card/password
     return (
         f"DATA USER PIN={code}\tName={name}\tPri={pri}\tVerify={verify}"
@@ -220,7 +232,7 @@ def _translate_for_push(cmd: DeviceCommand, db: Session) -> Optional[str]:
 
     if upper.startswith("ENROLL CARD") and len(parts) >= 4:
         # Production has no separate card command — the card rides on DATA USER.
-        return _user_data_line(parts[2], db, card_override=parts[3])
+        return _user_data_line(parts[2], db, card_override=parts[3], device_id=cmd.DeviceId)
 
     if upper.startswith("ENROLL BIOPHOTO") and len(parts) >= 3:
         # Face as a photo: an AI-face reader extracts its own template from the JPEG (eBioServer
@@ -243,9 +255,14 @@ def _translate_for_push(cmd: DeviceCommand, db: Session) -> Optional[str]:
         return None
 
     if upper.startswith("SYNC USER") and len(parts) >= 3:
-        return _user_data_line(parts[2], db)
+        return _user_data_line(parts[2], db, device_id=cmd.DeviceId)
 
     if upper.startswith("DELETE USER") and len(parts) >= 3:
+        # Push-protocol 2.x (AI-face) readers delete with DATA DELETE USERINFO (which also removes the person's
+        # faces, fingers and photos) and reject the old DEL_USER form; classic firmwares keep DEL_USER.
+        device = db.get(Device, cmd.DeviceId)
+        if device is not None and (device.DeviceType or "").strip().upper() == "AI":
+            return f"DATA DELETE USERINFO PIN={parts[2]}"
         return f"DATA DEL_USER PIN={parts[2]}"
 
     if upper in {"CLEAR LOG", "CLEAR LOGS"}:
@@ -345,14 +362,17 @@ def _store_operlog_records(db: Session, device: Device, records: list[dict]) -> 
 
         if kind == "USER":
             name = (fields.get("NAME") or "").strip()
-            if name:
+            # The server's name wins: a reader's name only fills a person who has no real name here yet (blank, or
+            # just the PIN). Taking it always made every Refresh from device undo the names set on the server.
+            current = (employee.EmployeeName or "").strip()
+            if name and name != pin and (not current or current == pin):
                 employee.EmployeeName = name
             card = (fields.get("CARD") or "").strip()
             if card and card != "0":
                 employee.EmployeeRFIDNumber = card
-            # Remember which reader holds this user: this is what the Users list,
-            # Transfer and deletes rely on for readers we cannot reach over the SDK.
-            note_user_on_device(db, device, employee)
+            # Remember which reader holds this user (and their privilege on it): this is what the Users list,
+            # Transfer, deletes and Send names rely on for readers we cannot reach over the SDK.
+            note_user_on_device(db, device, employee, privilege=fields.get("PRI"))
             inserted += 1
 
         elif kind in {"FP", "FACE"}:
@@ -858,6 +878,8 @@ async def devicecmd_ack(
             if row:
                 row.Status = "Executed" if ret >= 0 else "Failed"
                 row.ExecutionDate = now
+                if ret < 0:
+                    restore_after_failed_delete(db, device, row.DeviceCommand)
         device.LastPing = now
         db.commit()
         return PlainTextResponse("OK")

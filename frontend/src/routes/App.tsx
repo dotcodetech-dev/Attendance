@@ -92,6 +92,7 @@ export function App() {
           <Route path="ess/my-attendance" element={<EssMyAttendancePage />} />
           <Route path="ess/my-leaves" element={<EssLeavesPage />} />
           <Route path="ess/leave-approvals" element={<LeaveApprovalsPage />} />
+          <Route path="ess/leave-entry" element={<EssLeavesPage mode="admin" />} />
           <Route path="ess/manual-entry" element={<EssManualEntryPage />} />
           {/* Admin configuration */}
           <Route path="config/shifts" element={<ShiftsConfigPage />} />

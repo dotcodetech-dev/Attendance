@@ -36,7 +36,7 @@ export function IndividualSheetPage() {
       <div className="page-head">
         <div>
           <h2>Individual Attendance Sheet</h2>
-          <p className="sub">One employee's full month: in/out, worked hours, status, late/early and remarks.</p>
+          <p className="sub">One employee's full month: in/out, status, late/early and remarks.</p>
         </div>
       </div>
 
@@ -67,16 +67,15 @@ export function IndividualSheetPage() {
           <div className="table-scroll">
           <table className="table table-compact">
             <thead>
-              <tr><th>Date</th><th>Day</th><th>Status</th><th>Shift</th><th>In</th><th>Out</th><th>Worked</th><th>Late</th><th>Early</th><th>Remarks</th></tr>
+              <tr><th>Date</th><th>Day</th><th>Status</th><th>Category</th><th>In</th><th>Out</th><th>Late</th><th>Early</th><th>Remarks</th></tr>
             </thead>
             <tbody>
               {data.days.map((d: any) => (
                 <tr key={d.Date} style={{ background: tone(d.Status) }}>
                   <td>{d.Date}</td><td>{d.DayLabel}</td>
                   <td>{d.StatusLabel}{d.LeaveCode ? ` (${d.LeaveCode})` : ""}</td>
-                  <td>{d.ShiftName || "-"}</td>
+                  <td>{d.CategoryName || "-"}</td>
                   <td>{d.FirstIn || "-"}</td><td>{d.LastOut || "-"}</td>
-                  <td style={{ textAlign: "center" }}>{d.WorkedMinutes ? `${Math.floor(d.WorkedMinutes / 60)}h ${d.WorkedMinutes % 60}m` : "-"}</td>
                   <td style={{ textAlign: "center" }}>{d.Late || 0}</td>
                   <td style={{ textAlign: "center" }}>{d.Early || 0}</td>
                   <td>{d.Remarks || ""}</td>

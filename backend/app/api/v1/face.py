@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core.feature_flags import student_module_enabled
 from app.core.security import get_current_user
+from app.services.campus_scope import allowed_employee_codes, check_employee_code, devices_query
 from app.database import get_db
 from app.models.entities import Device, DeviceLog, Employee, EmployeeFaceEmbedding, EmployeePhoto, Student
 from app.services.attendance_settings import PunchRule, get_punch_rule
@@ -260,13 +261,13 @@ async def camera_status(_user=Depends(get_current_user)):
 def recent_punches(
     limit: int = 20,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     """Recent face-recognition punches (camera devices only), with snapshots."""
     limit = max(1, min(limit, 100))
     rows = (
-        db.query(DeviceLog, Device.DeviceName, Employee.EmployeeName)
-        .join(Device, Device.DeviceId == DeviceLog.DeviceId)
+        devices_query(db, user, db.query(DeviceLog, Device.DeviceName, Employee.EmployeeName)
+                      .join(Device, Device.DeviceId == DeviceLog.DeviceId))   # campus login: its own cameras
         .outerjoin(Employee, Employee.EmployeeCode == DeviceLog.EmployeeCode)
         .filter(Device.DeviceType == "Camera")
         .order_by(DeviceLog.DeviceLogId.desc())
@@ -291,7 +292,7 @@ def recent_punches(
 @router.get("/enrollments")
 def enrollment_summary(
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     """Enrollment counts per employee, for the enrollment table."""
     from sqlalchemy import func
@@ -305,9 +306,10 @@ def enrollment_summary(
         .group_by(EmployeeFaceEmbedding.EmployeeCode)
         .all()
     )
+    allowed = allowed_employee_codes(db, user)   # campus login: its own staff only
     return [
         {"employee_code": code, "count": count, "last_enrolled_at": last.isoformat() if last else None}
-        for code, count, last in rows
+        for code, count, last in rows if allowed is None or code in allowed
     ]
 
 
@@ -339,7 +341,7 @@ def list_enrollments(
 async def delete_enrollment(
     embedding_id: int,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     row = (
         db.query(EmployeeFaceEmbedding)
@@ -348,6 +350,7 @@ async def delete_enrollment(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Enrollment not found")
+    check_employee_code(db, user, row.EmployeeCode)
     db.delete(row)
     db.commit()
 

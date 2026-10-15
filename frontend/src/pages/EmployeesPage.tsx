@@ -6,12 +6,16 @@ import { api, getBackendBaseUrl } from "../api/client";
 import { BtnSpinner, LoadingNote } from "../components/LoadingNote";
 import { Req } from "../components/Req";
 import { Icons } from "../components/SidebarIcons";
+import { useCampusOrg } from "../store/me";
 
 function initialsOf(name: string): string {
   const parts = (name || "").trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
   return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
 }
+
+/** Department names are free text on the employee: compare ignoring case and extra spaces. */
+const normDept = (name: unknown) => String(name ?? "").trim().replace(/\s+/g, " ").toLowerCase();
 
 function SectionHead({ icon, title, desc }: { icon: React.ReactNode; title: string; desc: string }) {
   return (
@@ -44,7 +48,7 @@ const blankEdit = (): EditForm => ({ ...BLANK_EDIT, Role: "Employee", CurrentSta
 const IMPORT_FIELD_LABELS: Record<string, string> = {
   EmployeeCode: "Face ID (device code)",
   HrCode: "Employee Code (HR number)",
-  ShortNo: "Short Number",
+  ShortNo: "Sort No",
   EmployeeName: "Employee Name",
   EmployeeRFIDNumber: "Access Card / RFID",
   Department: "Department",
@@ -76,6 +80,9 @@ function generateCredentials(): { username: string; password: string } {
 }
 
 export function EmployeesPage() {
+  // A campus-role login works inside one institution: every institution list on this page offers only that one.
+  const campus = useCampusOrg();
+  const [campusRoleNames, setCampusRoleNames] = useState<string[]>([]);
   const [rows, setRows] = useState<any[]>([]);
   const [devices, setDevices] = useState<any[]>([]);
   const [categories, setCategories] = useState<CategoryOption[]>([]);
@@ -104,7 +111,8 @@ export function EmployeesPage() {
   const [saving, setSaving] = useState(false);
   // Enrolled face samples for the employee being edited: null = checking, -1 = could not check.
   const [faceCount, setFaceCount] = useState<number | null>(null);
-  const [organizations, setOrganizations] = useState<any[]>([]);
+  const [allOrganizations, setOrganizations] = useState<any[]>([]);
+  const organizations = campus ? allOrganizations.filter((o) => o.OrganizationId === campus.id) : allOrganizations;
   const [departmentsList, setDepartmentsList] = useState<any[]>([]);
   const [employeeTypes, setEmployeeTypes] = useState<any[]>([]);
   const [schools, setSchools] = useState<any[]>([]);
@@ -156,6 +164,7 @@ export function EmployeesPage() {
   const [search, setSearch] = useState("");
   const [orgFilter, setOrgFilter] = useState(""); // "" = all institutions
   const [schoolFilter, setSchoolFilter] = useState(""); // "" = all schools
+  const [deptFilter, setDeptFilter] = useState(""); // "" = all departments; else a department name
   const [pageSize, setPageSize] = useState(20); // -1 = All
   const IMPORT_TIMEOUT_MS = 200_000; // 200s so backend fallback (120+60s) can complete
 
@@ -166,12 +175,24 @@ export function EmployeesPage() {
           (v: string) => v && String(v).toLowerCase().includes(search.toLowerCase())
         )) &&
       (!orgFilter || String(r.OrganizationId) === orgFilter) &&
-      (!schoolFilter || String(r.SchoolId) === schoolFilter)
+      (!schoolFilter || String(r.SchoolId) === schoolFilter) &&
+      (!deptFilter || normDept(r.Department) === normDept(deptFilter))
   );
+  // Department dropdown: the master list (of the chosen institution) plus any name employees carry that is not in it.
+  const deptOptions = (() => {
+    const seen = new Map<string, string>();
+    departmentsList
+      .filter((d) => !orgFilter || String(d.OrganizationId) === orgFilter)
+      .forEach((d) => d.DepartmentName && seen.set(normDept(d.DepartmentName), d.DepartmentName));
+    rows
+      .filter((r: any) => !orgFilter || String(r.OrganizationId) === orgFilter)
+      .forEach((r: any) => r.Department && !seen.has(normDept(r.Department)) && seen.set(normDept(r.Department), String(r.Department).trim()));
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  })();
   const effSize = pageSize === -1 ? filteredRows.length || 1 : pageSize;
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / effSize));
   const currentPage = Math.min(page, totalPages);
-  // Short No (the office's own order: 1, 2, 10 - numeric) first, blanks keep their place after; same rule as the reports.
+  // Sort No (field ShortNo; the office's own order: 1, 2, 10 - numeric) first, blanks keep their place after; same rule as the reports.
   const shortNoKey = (v: unknown): [number, number, string] => {
     const s = String(v ?? "").trim();
     if (!s) return [2, 0, ""];
@@ -218,6 +239,8 @@ export function EmployeesPage() {
 
   const loadMasters = () => {
     api.getOrganizations().then(setOrganizations).catch(() => setOrganizations([]));
+    // Campus roles (User Roles) can be given to a portal login like the built-in roles.
+    api.getCampusRoles().then((r: any) => setCampusRoleNames((r.roles || []).map((c: any) => c.name))).catch(() => {});
     api.getDepartments().then(setDepartmentsList).catch(() => setDepartmentsList([]));
     api.getEmployeeTypes().then(setEmployeeTypes).catch(() => setEmployeeTypes([]));
     api.getDesignations().then(setDesignationsList).catch(() => setDesignationsList([]));
@@ -501,7 +524,8 @@ export function EmployeesPage() {
     return [{ value: "", label: noneLabel }, ...uniq.map((n) => ({ value: n, label: n }))];
   };
   const roleOptions = (current: string) => {
-    const opts = [...ROLE_OPTIONS];
+    // A campus login hands out only its own campus role (or Employee); an Admin can give any role.
+    const opts = campus ? ["Employee", ...campusRoleNames] : [...ROLE_OPTIONS, ...campusRoleNames];
     if (current && !opts.includes(current)) opts.unshift(current);
     return [{ value: "", label: "— Select —" }, ...opts.map((n) => ({ value: n, label: ROLE_LABEL[n] ?? n }))];
   };
@@ -835,8 +859,10 @@ export function EmployeesPage() {
           <button type="button" className="btn-outline-gray" onClick={() => setShowHelp((v) => !v)} aria-label="Help">
             {showHelp ? "Hide help" : "What is ID / Code?"}
           </button>
-          <button type="button" className="btn-outline-reports" onClick={openImport}>Import from Excel</button>
-          <button type="button" className="btn-outline-reports" onClick={openDups} title="Students a shared reader created as staff">Clean up student records</button>
+          {!campus && <>
+            <button type="button" className="btn-outline-reports" onClick={openImport}>Import from Excel</button>
+            <button type="button" className="btn-outline-reports" onClick={openDups} title="Students a shared reader created as staff">Clean up student records</button>
+          </>}
           <button type="button" className="btn btn-primary-purple" onClick={openAdd}>+ Add Employee</button>
         </div>
       </header>
@@ -936,10 +962,10 @@ export function EmployeesPage() {
                   </div>
                 )}
                 <div className="field" key="ShortNo">
-                  <label htmlFor="emp-short-no">Short Number</label>
+                  <label htmlFor="emp-short-no">Sort No</label>
                   <input id="emp-short-no" value={editForm.ShortNo} maxLength={20} placeholder="e.g. 12 (optional)" autoComplete="off"
                     onChange={(e) => efSet("ShortNo", e.target.value)} />
-                  <span className="field-hint">A short number for quick reference. Optional; it is not the Face ID and is not sent to devices.</span>
+                  <span className="field-hint">The office's own order: the employee list and reports are sorted by it (1, 2, 10 …). Optional; it is not the Face ID and is not sent to devices.</span>
                 </div>
                 {SelectField("Organization *", "OrganizationId", organizations.map((o) => ({ value: String(o.OrganizationId), label: o.OrgName })), (v) => setEditForm({ ...editForm, OrganizationId: v, Department: "" }))}
                 {SelectField("School", "SchoolId", [{ value: "", label: "— None —" }, ...schools.map((x) => ({ value: String(x.SchoolId), label: x.SchoolName }))])}
@@ -1478,12 +1504,16 @@ export function EmployeesPage() {
             <input type="search" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search by name, code, Face ID, department..." aria-label="Search employees" />
           </div>
           <select className="input" value={orgFilter} onChange={(e) => { setOrgFilter(e.target.value); setPage(1); }} aria-label="Filter by institution" style={{ maxWidth: 240 }}>
-            <option value="">All institutions</option>
-            {organizations.map((o) => <option key={o.OrganizationId} value={String(o.OrganizationId)}>{o.OrgName}</option>)}
+            <option value="">{campus ? campus.name : "All institutions"}</option>
+            {!campus && organizations.map((o) => <option key={o.OrganizationId} value={String(o.OrganizationId)}>{o.OrgName}</option>)}
           </select>
           <select className="input" value={schoolFilter} onChange={(e) => { setSchoolFilter(e.target.value); setPage(1); }} aria-label="Filter by school" style={{ maxWidth: 240 }}>
             <option value="">All schools</option>
             {schools.map((x) => <option key={x.SchoolId} value={String(x.SchoolId)}>{x.SchoolName}</option>)}
+          </select>
+          <select className="input" value={deptFilter} onChange={(e) => { setDeptFilter(e.target.value); setPage(1); }} aria-label="Filter by department" style={{ maxWidth: 240 }}>
+            <option value="">All departments</option>
+            {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             {selectedIds.size > 0 && (
@@ -1506,7 +1536,7 @@ export function EmployeesPage() {
                     aria-label="Select all on this page" title="Select all on this page" />
                 </th>
                 <th>Employee Code</th>
-                <th>Short No</th>
+                <th>Sort No</th>
                 <th>Face ID</th>
                 <th>Name</th>
                 <th>Department</th>

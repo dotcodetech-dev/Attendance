@@ -188,6 +188,10 @@ export const api = {
   getDeviceMachineUsers: (deviceId: number) => request(`/devices/${deviceId}/machine-users`),
   // Push-channel readers: ask the reader to re-send its users/templates (arrive via OPERLOG).
   refreshDeviceMachineUsers: (deviceId: number) => request(`/devices/${deviceId}/machine-users/refresh`, { method: "POST" }),
+  /** Push readers: send the server's employee names to the reader (admin rights on the reader are kept). */
+  sendNamesToDevice: (deviceId: number) => request(`/devices/${deviceId}/machine-users/send-names`, { method: "POST" }),
+  /** When the reader last polled and what the server holds for it (explains an empty user list). */
+  getReaderStatus: (deviceId: number) => request(`/devices/${deviceId}/reader-status`),
   importEmployeesFromDevice: (deviceId: number, payload?: unknown, options?: { signal?: AbortSignal }) =>
     request(`/devices/${deviceId}/import-employees`, { method: "POST", body: JSON.stringify(payload || {}), signal: options?.signal }),
   syncEmployeesToDevice: (deviceId: number, payload?: unknown) =>
@@ -580,6 +584,9 @@ export const api = {
     request("/student-leaves/requests", { method: "POST", body: JSON.stringify(payload) }),
   decideStudentLeave: (id: number, status: "Approved" | "Rejected") =>
     request(`/student-leaves/requests/${id}/decision`, { method: "POST", body: JSON.stringify({ status }) }),
+  /** Undo a student leave / OD; those days are recalculated. */
+  cancelStudentLeave: (id: number) =>
+    request(`/student-leaves/requests/${id}/cancel`, { method: "POST" }),
   getStudentDashboard: (p: { date: string; days: number; department_id?: number; registered_year?: string }) => {
     const s = new URLSearchParams({ date: p.date, days: String(p.days) });
     if (p.department_id) s.set("department_id", String(p.department_id));
@@ -594,6 +601,9 @@ export const api = {
   },
   markStudentAttendance: (payload: unknown) =>
     request("/student-attendance/manual", { method: "POST", body: JSON.stringify(payload) }),
+  /** Same manual status for many students over a date range. */
+  markStudentAttendanceBulk: (payload: { StudentCodes: string[]; FromDate: string; ToDate: string; Status: string; InTime?: string | null; OutTime?: string | null }) =>
+    request("/student-attendance/manual/bulk", { method: "POST", body: JSON.stringify(payload) }),
   clearStudentManual: (student_code: string, date: string) =>
     request(`/student-attendance/manual?student_code=${encodeURIComponent(student_code)}&date=${date}`, { method: "DELETE" }),
   getStudentReport: (p: { from_date: string; to_date: string; department_id?: number; registered_year?: string }) => {
@@ -687,6 +697,12 @@ export const api = {
   },
   applyLeave: (payload: unknown) =>
     request("/leaves/apply", { method: "POST", body: JSON.stringify(payload) }),
+  /** Admin enters a leave directly: saved as Approved, no approval steps. */
+  adminLeaveEntry: (payload: unknown) =>
+    request("/leaves/admin-entry", { method: "POST", body: JSON.stringify(payload) }),
+  /** Admin undoes a leave; its days go back to the balance. */
+  cancelLeave: (leaveRequestId: number) =>
+    request(`/leaves/${leaveRequestId}/cancel`, { method: "POST" }),
 
   // ESS – Manual Entry / OD
   getMyManualEntries: (params: { employee_code: string; from_date?: string; to_date?: string }) => {
@@ -708,6 +724,13 @@ export const api = {
   getRoleConfig: () => request("/role-config"),
   updateRoleConfig: (payload: { admin: Record<string, boolean>; manager: Record<string, boolean>; employee: Record<string, boolean> }) =>
     request("/role-config", { method: "PUT", body: JSON.stringify(payload) }),
+  /** Campus roles: a role limited to one institution, with its own menu switches. */
+  getCampusRoles: () => request("/role-config/campus-roles"),
+  saveCampusRole: (payload: { name: string; organization_id: number | null; permissions: Record<string, boolean>; original_name?: string | null }) =>
+    request("/role-config/campus-roles", { method: "PUT", body: JSON.stringify(payload) }),
+  deleteCampusRole: (name: string) => request(`/role-config/campus-roles/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  /** The signed-in login: role, and for a campus role its institution and menus. */
+  getMe: () => request("/auth/me"),
 
   createUser: (payload: { login_name: string; password: string; role_name?: string; employee_code?: string }) =>
     request("/users", { method: "POST", body: JSON.stringify(payload) }),

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import date
+import re
+from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.feature_flags import require_student_module
@@ -34,6 +35,40 @@ class ManualIn(BaseModel):
     Status: str
     InTime: Optional[str] = None
     OutTime: Optional[str] = None
+
+
+class ManualBulkIn(BaseModel):
+    """Manual attendance for one or more students over a date range (e.g. reader down, field visit)."""
+    StudentCodes: list[str] = Field(min_length=1, max_length=2000)
+    FromDate: date
+    ToDate: date
+    Status: str
+    InTime: Optional[str] = None   # HH:MM, optional
+    OutTime: Optional[str] = None
+
+
+MAX_MANUAL_DAYS = 62
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _clean_time(v: Optional[str], label: str) -> Optional[str]:
+    v = (v or "").strip()
+    if not v:
+        return None
+    if not _HHMM.match(v):
+        raise HTTPException(400, f"{label} must be HH:MM (24-hour), e.g. 09:15")
+    return v
+
+
+def _set_manual(db: Session, code: str, day: date, status: str, in_time: Optional[str], out_time: Optional[str]) -> None:
+    row = db.query(StudentAttendanceProcessed).filter(
+        StudentAttendanceProcessed.StudentCode == code,
+        StudentAttendanceProcessed.AttendanceDate == day).first()
+    if row is None:
+        row = StudentAttendanceProcessed(StudentCode=code, AttendanceDate=day)
+        db.add(row)
+    row.Status, row.InTime, row.OutTime = status, in_time, out_time
+    row.LateMinutes, row.LeaveCode, row.Source = 0, None, "Manual"
 
 
 def _dept_names(db: Session) -> dict[int, str]:
@@ -106,16 +141,38 @@ def manual_mark(p: ManualIn, db: Session = Depends(get_db), _user=Depends(get_cu
         raise HTTPException(400, f"Status must be one of {', '.join(STATUSES)}")
     if not db.query(Student.StudentId).filter(Student.StudentCode == p.StudentCode).first():
         raise HTTPException(404, "Student not found")
-    row = db.query(StudentAttendanceProcessed).filter(
-        StudentAttendanceProcessed.StudentCode == p.StudentCode,
-        StudentAttendanceProcessed.AttendanceDate == p.AttendanceDate).first()
-    if row is None:
-        row = StudentAttendanceProcessed(StudentCode=p.StudentCode, AttendanceDate=p.AttendanceDate)
-        db.add(row)
-    row.Status, row.InTime, row.OutTime = p.Status, p.InTime, p.OutTime
-    row.LateMinutes, row.LeaveCode, row.Source = 0, None, "Manual"
+    _set_manual(db, p.StudentCode, p.AttendanceDate, p.Status,
+                _clean_time(p.InTime, "In time"), _clean_time(p.OutTime, "Out time"))
     db.commit()
     return {"ok": True}
+
+
+@router.post("/manual/bulk")
+def manual_mark_bulk(p: ManualBulkIn, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+    """Mark the same status for every listed student on every day of the range. Manual rows are kept by the
+    automatic recalculation; "Reset to auto" (DELETE /manual) brings a day back to punch-based."""
+    if p.Status not in STATUSES:
+        raise HTTPException(400, f"Status must be one of {', '.join(STATUSES)}")
+    if p.ToDate < p.FromDate:
+        raise HTTPException(400, "To date is before from date")
+    if p.ToDate > date.today():
+        raise HTTPException(400, "Attendance cannot be marked for a future date")
+    n_days = (p.ToDate - p.FromDate).days + 1
+    if n_days > MAX_MANUAL_DAYS:
+        raise HTTPException(400, f"Mark at most {MAX_MANUAL_DAYS} days at a time")
+    in_time, out_time = _clean_time(p.InTime, "In time"), _clean_time(p.OutTime, "Out time")
+    if in_time and out_time and out_time < in_time:
+        raise HTTPException(400, "Out time is before in time")
+    codes = list(dict.fromkeys(c.strip() for c in p.StudentCodes if c and c.strip()))
+    known = {s for (s,) in db.query(Student.StudentCode).filter(Student.StudentCode.in_(codes))}
+    missing = [c for c in codes if c not in known]
+    if missing:
+        raise HTTPException(404, f"Student not found: {', '.join(missing[:5])}" + (" …" if len(missing) > 5 else ""))
+    for code in codes:
+        for i in range(n_days):
+            _set_manual(db, code, p.FromDate + timedelta(days=i), p.Status, in_time, out_time)
+    db.commit()
+    return {"ok": True, "students": len(codes), "days": n_days, "rows": len(codes) * n_days}
 
 
 @router.delete("/manual")

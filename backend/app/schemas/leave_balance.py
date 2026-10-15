@@ -12,4 +12,5 @@ class LeaveBalanceOut(BaseModel):
     AvailableDays: int
     IsPaid: str
     IsActive: str
+    Unlimited: bool = False   # 0 days per year on the leave type = no yearly limit
 

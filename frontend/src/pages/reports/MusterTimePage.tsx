@@ -4,14 +4,14 @@ import { RangeReportPage } from "./RangeReportPage";
 
 const stack = { whiteSpace: "pre-line" as const, fontWeight: 600 };
 
-/** Attendance Report (time only): per-day IN / OUT / worked-hours grid + Late Hrs. */
+/** Attendance Report (time only): per-day IN / OUT grid + Late Hrs. */
 export function MusterTimePage() {
   return (
     <RangeReportPage
       reportKey="muster-time"
       musterPrint="time"
       title="Attendance Report (Time)"
-      description="Daily In / Out / worked-hours muster for the selected range, grouped by department."
+      description="Daily In / Out muster for the selected range, grouped by department."
       getFn={api.getMusterTime}
       minWidth={1000}
       subtitle={(d) => `From ${d.FromLabel} To ${d.ToLabel}   ·   Category : ${d.Category}`}

@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.models.entities import (
     AttendanceCategory, AttendanceProcessed, DeviceLog, Employee, EmployeeType,
-    LeaveConfig, School, Shift, ShiftRoster,
+    LeaveConfig, School,
 )
 from app.services.report_scope import ReportScope
 from app.services.attendance_processing import exit_cutoff, process_range
@@ -59,7 +59,7 @@ def _hr_code(e: Employee) -> str:
 
 
 def _hhmm(minutes: Optional[int]) -> str:
-    """Minutes -> HH:MM (used for worked hours, Late Hrs)."""
+    """Minutes -> HH:MM (used for Late Hrs and the late / early minutes)."""
     m = max(0, int(minutes or 0))
     return f"{m // 60:02d}:{m % 60:02d}"
 
@@ -190,12 +190,12 @@ def muster_columns(leave_codes: list[str]) -> list[str]:
 
 
 def _muster_cell(row: Optional[AttendanceProcessed]) -> str:
-    """One day cell for the time muster: IN / OUT / worked-hours stacked (3 lines) when the person punched,
-    blank otherwise. Absence, weekly-offs and leave are counted in the summary columns, as on the printed muster."""
+    """One day cell for the time muster: IN / OUT stacked (2 lines) when the person punched, blank otherwise.
+    Worked hours are not shown (removed at the college's request, Oct 2026). Absence, weekly-offs and leave
+    are counted in the summary columns, as on the printed muster."""
     if row is None or not row.FirstIn:
         return ""
-    worked = _hhmm(row.ActualWorkMinutes) if (row.ActualWorkMinutes or 0) > 0 else ""
-    return f"{row.FirstIn}\n{row.LastOut or ''}\n{worked}"
+    return f"{row.FirstIn}\n{row.LastOut or ''}"
 
 
 def _summarize_counts(
@@ -263,27 +263,17 @@ def _range_meta(db: Session, from_date: date, to_date: date, scope: Optional[Rep
     }
 
 
-def _current_shift_names(db: Session, codes: list[str]) -> dict[str, str]:
-    """EmployeeCode -> shift name applicable today (roster row, else the default shift)."""
-    if not codes:
-        return {}
-    shift_names = {s.ShiftId: s.ShiftName for s in db.query(Shift).all()}
-    default = db.query(Shift).filter(Shift.IsDefault == "Y").first()
-    out: dict[str, str] = {}
-    today = datetime.combine(date.today(), time.min)
-    for r in db.query(ShiftRoster).filter(ShiftRoster.EmployeeCode.in_(codes)).all():
-        if r.FromDate <= today and (r.ToDate is None or r.ToDate >= today):
-            out[r.EmployeeCode] = shift_names.get(r.ShiftId, "")
-    for c in codes:
-        out.setdefault(c, default.ShiftName if default else "")
-    return out
+def _category_names(db: Session) -> dict[int, str]:
+    """CategoryId -> attendance category name. The reports show the employee's category (Teaching,
+    Non-Teaching ...) where they used to show the day's shift."""
+    return {c.CategoryId: c.CategoryName for c in db.query(AttendanceCategory).all()}
 
 
 def muster_time_report(
     db: Session, from_date: Optional[date], to_date: Optional[date],
     scope: Optional[ReportScope] = None, refresh: bool = True,
 ) -> dict:
-    """Attendance Report (time only): per-day IN/OUT/worked-hours grid + Late Hrs."""
+    """Attendance Report (time only): per-day IN/OUT grid + Late Hrs."""
     from_date, to_date = _range_bounds(from_date, to_date)
     if refresh:
         process_range(db, from_date, to_date)
@@ -449,8 +439,7 @@ def employee_list_report(db: Session, scope: Optional[ReportScope] = None) -> di
     employees = _employees(db, scope)
     codes = [e.EmployeeCode for e in employees]
     type_map = {t.EmployeeTypeId: t.TypeName for t in db.query(EmployeeType).all()}
-    cat_map = {c.CategoryId: c.CategoryName for c in db.query(AttendanceCategory).all()}
-    shift_map = _current_shift_names(db, codes)
+    cat_map = _category_names(db)
 
     rows = []
     for i, e in enumerate(employees, 1):
@@ -459,7 +448,6 @@ def employee_list_report(db: Session, scope: Optional[ReportScope] = None) -> di
             "Department": e.Department, "Designation": e.Designation,
             "Type": type_map.get(e.EmployeeTypeId, "") or "",
             "CategoryName": cat_map.get(e.CategoryId, "") or "",
-            "Shift": shift_map.get(e.EmployeeCode, ""),
             "Status": e.CurrentStatus or "", "JoiningDate": e.JoiningDate or "",
         })
     labels = scope_labels(db, scope)
@@ -548,6 +536,7 @@ def daily_status_report(
     employees = _employees(db, scope, active_from=day)
     codes = [e.EmployeeCode for e in employees]
     by_emp = _processed_by_emp(db, day, day, codes)
+    cat_map = _category_names(db)
     in_progress = day >= date.today()
 
     def classify(row: Optional[AttendanceProcessed]) -> tuple[str, str, str]:
@@ -588,7 +577,7 @@ def daily_status_report(
             "StatusLabel": label,
             "Bucket": b,
             "LeaveCode": row.LeaveCode if row else None,
-            "ShiftName": row.ShiftName if row else None,
+            "CategoryName": cat_map.get(e.CategoryId) or None,
             "FirstIn": row.FirstIn if row else None,
             # A single punch is only an IN; don't echo it as the OUT time.
             "LastOut": row.LastOut if row and int(row.TotalLogs or 0) >= 2 else None,
@@ -671,6 +660,7 @@ def individual_sheet(
         process_range(db, from_date, to_date, face_id)
     day_map = _processed_by_emp(db, from_date, to_date, [face_id]).get(face_id, {})
     left_after = exit_cutoff(employee)
+    category = (_category_names(db).get(employee.CategoryId) if employee else None) or None
 
     days = []
     for d in range(1, days_in_month + 1):
@@ -681,7 +671,7 @@ def individual_sheet(
             "Status": row.Status if row else ("X" if left_after and cd > left_after else "A"),
             "StatusLabel": (row.StatusLabel if row else ("Left" if left_after and cd > left_after else "Absent")),
             "LeaveCode": row.LeaveCode if row else None,
-            "ShiftName": row.ShiftName if row else None,
+            "CategoryName": category,
             "FirstIn": row.FirstIn if row else None,
             "LastOut": row.LastOut if row else None,
             "WorkedMinutes": row.ActualWorkMinutes if row else 0,

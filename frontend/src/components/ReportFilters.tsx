@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../api/client";
+import { useCampusOrg } from "../store/me";
 
 export interface ReportFilterValues {
   from: string;
@@ -51,6 +52,8 @@ export function ReportFilters({ value, onChange, withDateRange = true }: {
 }) {
   const [organizations, setOrganizations] = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
+  // A campus-role login reports on its own institution only (the server enforces it; this shows it).
+  const campus = useCampusOrg();
   const [employeeTypes, setEmployeeTypes] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
 
@@ -102,17 +105,26 @@ export function ReportFilters({ value, onChange, withDateRange = true }: {
         </>
       )}
       <div className="field"><label>Organization</label>
-        <select value={value.organizationId}
-                onChange={(e) => set({ organizationId: e.target.value, department: "" })}>
-          <option value="">All organizations</option>
-          {organizations.map((o) => <option key={o.OrganizationId} value={o.OrganizationId}>{o.OrgName}</option>)}
-        </select>
+        {campus ? (
+          <select value="" disabled title="Your role is limited to this institution">
+            <option value="">{campus.name}</option>
+          </select>
+        ) : (
+          <select value={value.organizationId}
+                  onChange={(e) => set({ organizationId: e.target.value, department: "" })}>
+            <option value="">All organizations</option>
+            {organizations.map((o) => <option key={o.OrganizationId} value={o.OrganizationId}>{o.OrgName}</option>)}
+          </select>
+        )}
       </div>
       <div className="field"><label>Department</label>
         <select value={value.department} onChange={(e) => set({ department: e.target.value })}>
           <option value="">All departments</option>
           {departments
-            .filter((d) => !value.organizationId || d.OrganizationId === Number(value.organizationId))
+            .filter((d) => {
+              const org = campus ? campus.id : Number(value.organizationId) || null;
+              return !org || d.OrganizationId === org;
+            })
             .map((d) => <option key={d.DepartmentId} value={d.DepartmentName}>{d.DepartmentName}</option>)}
         </select>
       </div>

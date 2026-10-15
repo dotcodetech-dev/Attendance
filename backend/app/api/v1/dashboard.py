@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 from collections import defaultdict
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
@@ -10,6 +11,7 @@ from sqlalchemy.exc import OperationalError, DBAPIError
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
+from app.services.campus_scope import user_org_id
 from app.database import get_db
 from app.models.entities import Device, DeviceLog, Employee
 
@@ -18,9 +20,9 @@ log = logging.getLogger(__name__)
 
 
 @router.get("/summary")
-def summary(db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def summary(db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        return _build_summary(db)
+        return _build_summary(db, user_org_id(db, user))
     except (OperationalError, DBAPIError, OSError) as exc:
         log.error("Dashboard DB error: %s", exc)
         return JSONResponse(
@@ -29,14 +31,26 @@ def summary(db: Session = Depends(get_db), _user=Depends(get_current_user)):
         )
 
 
-def _build_summary(db: Session):
+def _build_summary(db: Session, org: Optional[int] = None):
+    """org: a campus login's institution - every count covers only its readers, staff and their punches."""
+    def dev(q):
+        return q.filter(Device.OrganizationId == org) if org is not None else q
+
+    def emp(q):
+        return q.filter(Employee.OrganizationId == org) if org is not None else q
+
+    def logs(q):
+        if org is None:
+            return q
+        return q.filter(DeviceLog.EmployeeCode.in_(db.query(Employee.EmployeeCode).filter(Employee.OrganizationId == org)))
+
     now = datetime.utcnow()
-    total_devices = db.query(func.count(Device.DeviceId)).scalar() or 0
+    total_devices = dev(db.query(func.count(Device.DeviceId))).scalar() or 0
     online_threshold = now - timedelta(minutes=5)
-    online_devices = db.query(func.count(Device.DeviceId)).filter(Device.LastPing >= online_threshold).scalar() or 0
+    online_devices = dev(db.query(func.count(Device.DeviceId))).filter(Device.LastPing >= online_threshold).scalar() or 0
     # Employees who have left (Inactive / Resigned / Terminated, past their last working day) are not counted.
     total_users = (
-        db.query(func.count(Employee.EmployeeId))
+        emp(db.query(func.count(Employee.EmployeeId)))
         .filter(or_(
             Employee.CurrentStatus.is_(None),
             Employee.CurrentStatus.notin_(["Inactive", "Resigned", "Terminated"]),
@@ -46,9 +60,9 @@ def _build_summary(db: Session):
     )
 
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_logs = db.query(func.count(DeviceLog.DeviceLogId)).filter(DeviceLog.LogDate >= today_start).scalar() or 0
+    today_logs = logs(db.query(func.count(DeviceLog.DeviceLogId))).filter(DeviceLog.LogDate >= today_start).scalar() or 0
     face_logs_today = (
-        db.query(func.count(DeviceLog.DeviceLogId))
+        logs(db.query(func.count(DeviceLog.DeviceLogId)))
         .filter(DeviceLog.LogDate >= today_start)
         .filter(
             or_(
@@ -62,7 +76,7 @@ def _build_summary(db: Session):
 
     # Attendance trend for last 7 days (including today).
     trend_start = today_start - timedelta(days=6)
-    trend_rows = db.query(DeviceLog.LogDate).filter(DeviceLog.LogDate >= trend_start).all()
+    trend_rows = logs(db.query(DeviceLog.LogDate)).filter(DeviceLog.LogDate >= trend_start).all()
     trend_buckets: dict[str, int] = defaultdict(int)
     for row in trend_rows:
         day_key = row.LogDate.strftime("%Y-%m-%d")
@@ -81,7 +95,7 @@ def _build_summary(db: Session):
 
     # Today's device activity (top devices by log count).
     activity_rows = (
-        db.query(DeviceLog.DeviceId, func.count(DeviceLog.DeviceLogId).label("count"))
+        logs(db.query(DeviceLog.DeviceId, func.count(DeviceLog.DeviceLogId).label("count")))
         .filter(DeviceLog.LogDate >= today_start)
         .group_by(DeviceLog.DeviceId)
         .order_by(func.count(DeviceLog.DeviceLogId).desc())
@@ -100,14 +114,14 @@ def _build_summary(db: Session):
 
     # Recent attendance panel.
     recent_logs = (
-        db.query(DeviceLog)
+        logs(db.query(DeviceLog))
         .order_by(DeviceLog.LogDate.desc())
         .limit(20)
         .all()
     )
     # Face recognition logs panel.
     recent_face_logs = (
-        db.query(DeviceLog)
+        logs(db.query(DeviceLog))
         .filter(
             or_(
                 DeviceLog.AttPhoto.isnot(None),
@@ -120,7 +134,7 @@ def _build_summary(db: Session):
     )
 
     # Device alerts panel (offline devices, worst first).
-    devices = db.query(Device).all()
+    devices = dev(db.query(Device)).all()
     offline_threshold = now - timedelta(minutes=5)
     alerts = []
     for device in devices:

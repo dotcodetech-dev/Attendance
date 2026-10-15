@@ -221,6 +221,8 @@ class Device(Base):
     IsAttendanceDevice: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)
     LocationId: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     CommKey: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # SDK login key set on the reader
+    # Institution the reader belongs to: a campus-role login (User Roles) sees only its institution's readers.
+    OrganizationId: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class Organization(Base):

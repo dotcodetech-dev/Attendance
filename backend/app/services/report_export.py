@@ -137,7 +137,7 @@ def _xlsx(title: str, subtitle: str, headers: list[str], rows: list[Any], org: d
 _PURPLE = colors.HexColor("#5b21b6")
 _LIGHT = colors.HexColor("#ede9fe")
 _DEEP = colors.HexColor("#4c1d95")
-# Style for multi-line table cells (stacked IN / OUT / worked-hours).
+# Style for multi-line table cells (stacked IN / OUT).
 def _cell_style(delta: float = 0) -> ParagraphStyle:
     return ParagraphStyle("cell", fontName="Helvetica", fontSize=6 + delta, leading=6.8 + delta, alignment=TA_CENTER)
 
@@ -255,11 +255,11 @@ def _daily(data: dict, grouped: bool):
     t = data["Totals"]
     subtitle = (f"{data['DayLabel']}  —  Present {t['present']} (Late {t.get('late', 0)}), "
                 f"Absent {t['absent']}, Leave {t['leave']}, Off {t['off']} of {t['total']}")
-    headers = ["S.No", "Employee Code", "Employee Name", "Department", "Designation", "Status", "Shift", "In", "Out", "Late (min)", "Remarks"]
+    headers = ["S.No", "Employee Code", "Employee Name", "Department", "Designation", "Status", "Category", "In", "Out", "Late (min)", "Remarks"]
     rows = _rows(data, lambda e: [
         e["SNo"], e["EmployeeCode"], e["EmployeeName"], e["Department"] or "", e.get("Designation") or "",
         (e["LeaveCode"] or e["StatusLabel"]) if e["Status"] == "L" else e["StatusLabel"],
-        e["ShiftName"] or "", e["FirstIn"] or "", e["LastOut"] or "", e["LateMinutes"] or 0, e["Remarks"] or ""], grouped)
+        e["CategoryName"] or "", e["FirstIn"] or "", e["LastOut"] or "", e["LateMinutes"] or 0, e["Remarks"] or ""], grouped)
     return kind, subtitle, headers, rows
 
 
@@ -273,9 +273,9 @@ def _late_ot(data: dict, grouped: bool = False):
 
 
 def _individual(data: dict, grouped: bool = False):
-    headers = ["Date", "Day", "Status", "Leave", "Shift", "In", "Out", "Worked", "Late", "Early", "Remarks"]
-    rows = [[d["Date"], d["DayLabel"], d["StatusLabel"], d["LeaveCode"] or "", d["ShiftName"] or "",
-             d["FirstIn"] or "", d["LastOut"] or "", d["WorkedMinutes"], d["Late"], d["Early"],
+    headers = ["Date", "Day", "Status", "Leave", "Category", "In", "Out", "Late", "Early", "Remarks"]
+    rows = [[d["Date"], d["DayLabel"], d["StatusLabel"], d["LeaveCode"] or "", d["CategoryName"] or "",
+             d["FirstIn"] or "", d["LastOut"] or "", d["Late"], d["Early"],
              d["Remarks"] or ""] for d in data["days"]]
     subtitle = f"{data['EmployeeName'] or data['EmployeeCode']} — {data['MonthLabel']}"
     return "Individual Attendance Sheet", subtitle, headers, rows
@@ -328,10 +328,10 @@ def _in_out(data: dict, grouped: bool):
 
 def _employee_list(data: dict, grouped: bool):
     headers = ["S.No", "Employee Code", "Employee Name", "Department", "Designation",
-               "Type", "Category", "Shift", "Status", "Joining Date"]
+               "Type", "Category", "Status", "Joining Date"]
     rows = _rows(data, lambda e: [
         e["SNo"], e["EmployeeCode"], e["EmployeeName"], e["Department"] or "", e.get("Designation") or "",
-        e["Type"], e["CategoryName"], e["Shift"], e["Status"], e["JoiningDate"]], grouped)
+        e["Type"], e["CategoryName"], e["Status"], e["JoiningDate"]], grouped)
     subtitle = f"{data['Count']} employees    Category : {data['Category']}    as on {data['GeneratedLabel']}"
     return "Employee List", subtitle, headers, rows
 

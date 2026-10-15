@@ -7,6 +7,7 @@ import { BtnSpinner, LoadingNote, SkeletonRows } from "../components/LoadingNote
 import { Icons } from "../components/SidebarIcons";
 import { TemplateCells, templateTotals } from "../components/TemplateCells";
 import { Req } from "../components/Req";
+import { useCampusOrg } from "../store/me";
 import { formatIST, timeAgoIST } from "../utils/datetime";
 
 const DEVICE_TYPES: { value: string; label: string }[] = [
@@ -35,6 +36,7 @@ type DeviceForm = {
   DeviceType: string;
   Port: string;
   CommKey: string;
+  OrganizationId: string;   // institution ("" = not set); campus-role logins see only their institution's readers
 };
 
 const EMPTY_FORM: DeviceForm = {
@@ -45,6 +47,7 @@ const EMPTY_FORM: DeviceForm = {
   DeviceType: "AI",
   Port: "4370",
   CommKey: "",
+  OrganizationId: "",
 };
 
 type DetailState = {
@@ -69,6 +72,11 @@ const EMPTY_DETAIL: DetailState = {
 
 export function DevicesPage() {
   const navigate = useNavigate();
+  // A campus-role login sees only its institution's readers (the server filters them) and new readers join it.
+  const campus = useCampusOrg();
+  const [organizations, setOrganizations] = useState<{ OrganizationId: number; OrgName: string }[]>([]);
+  useEffect(() => { api.getOrganizations().then(setOrganizations).catch(() => setOrganizations([])); }, []);
+  const orgNameOf = (id: number | null | undefined) => organizations.find((o) => o.OrganizationId === id)?.OrgName || "";
   const [rows, setRows] = useState<any[]>([]);
   const [blocked, setBlocked] = useState<any[]>([]);   // Face IDs of deleted people the readers may still send
   const [devicesLoaded, setDevicesLoaded] = useState(false);   // so "No devices yet" is not shown while they are still loading
@@ -137,6 +145,7 @@ export function DevicesPage() {
       DeviceType: row.DeviceType || "AI",
       Port: "4370",
       CommKey: row.CommKey != null ? String(row.CommKey) : "",
+      OrganizationId: row.OrganizationId != null ? String(row.OrganizationId) : "",
     });
     setFormError("");
     setSdkStatus("");
@@ -161,11 +170,13 @@ export function DevicesPage() {
           DeviceDirection: form.DeviceDirection,
           DeviceType: form.DeviceType,
           CommKey: form.CommKey.trim() ? Number(form.CommKey) : null,
+          OrganizationId: form.OrganizationId ? Number(form.OrganizationId) : null,
         });
         setStatus({ text: "Device updated.", ok: true });
       } else {
-        const { Port, CommKey, ...deviceFields } = form;
-        await api.createDevice({ ...deviceFields, CommKey: CommKey.trim() ? Number(CommKey) : null });
+        const { Port, CommKey, OrganizationId, ...deviceFields } = form;
+        await api.createDevice({ ...deviceFields, CommKey: CommKey.trim() ? Number(CommKey) : null,
+          OrganizationId: OrganizationId ? Number(OrganizationId) : null });
         setStatus({ text: `${form.DeviceName.trim()} added.`, ok: true });
       }
       closeModal();
@@ -297,12 +308,28 @@ export function DevicesPage() {
   const closeUsers = () => {
     usersReq.current += 1;
     stopReloadTimer();
+    setReaderStatus(null);
     setSelectedDeviceId(null);
     setDeviceUsers([]);
     setUsersStatus("");
     setUsersError(false);
     setUsersMode("");
     setRefreshingUsers(false);
+  };
+
+  // What the server knows about a push reader: last poll, users on record, last refresh (explains an empty list).
+  const [readerStatus, setReaderStatus] = useState<any>(null);
+  const loadReaderStatus = (deviceId: number) =>
+    api.getReaderStatus(deviceId).then((s) => { setReaderStatus(s); return s; }).catch(() => { setReaderStatus(null); return null; });
+
+  const emptyListNote = (s: any) => {
+    if (!s) return "No users known for this device yet. If it is a remote (push) reader, use Refresh from device.";
+    if (s.last_refresh && (s.last_refresh.status === "Pending" || s.last_refresh.status === "Sent"))
+      return `No users yet. A refresh was asked for and is ${s.last_refresh.status === "Pending" ? "waiting for the reader to poll" : "with the reader"}; `
+        + `the reader last polled ${s.last_poll_text}. Its users appear once it answers.`;
+    if (!s.polling)
+      return `No users yet, and the reader last polled ${s.last_poll_text}. Check its network and its Cloud Server / ADMS setting, then use Refresh from device.`;
+    return "No users on record for this reader yet. Use Refresh from device to ask it for its user list.";
   };
 
   const loadUsers = async (deviceId: number) => {
@@ -314,13 +341,17 @@ export function DevicesPage() {
     setUsersStatus("");
     setUsersError(false);
     setUsersMode("read");
+    setReaderStatus(null);
+    const statusP = loadReaderStatus(deviceId);
     try {
       const users = await api.getDeviceMachineUsers(deviceId);
       if (req !== usersReq.current) return;
       setDeviceUsers(users);
       const viaPush = users.length > 0 && users[0].Source === "push";
+      const status = users.length === 0 ? await statusP : null;
+      if (req !== usersReq.current) return;
       setUsersStatus(users.length === 0
-        ? "No users known for this device yet. If it is a remote (push) reader, use Refresh from device."
+        ? emptyListNote(status)
         : viaPush ? "Remote reader (Cloud/ADMS push): showing the users it has sent to this server. Use Refresh from device to re-read them." : "");
     } catch (err) {
       if (req !== usersReq.current) return;
@@ -338,7 +369,11 @@ export function DevicesPage() {
   };
 
   const [refreshingUsers, setRefreshingUsers] = useState(false);
-  const RELOAD_AFTER_SECONDS = 30;
+  const [refreshCount, setRefreshCount] = useState<number | null>(null);   // users seen so far while waiting
+  // A reader answers a refresh over its next polls; a slow or briefly quiet one takes longer than a fixed 30 s.
+  // Re-read the list every 10 s for up to 2 minutes; finish early once users have arrived and the count holds steady.
+  const REFRESH_WAIT_SECONDS = 120;
+  const REFRESH_CHECK_EVERY = 10;
   const refreshUsersFromDevice = async (deviceId: number) => {
     usersReq.current += 1;
     const req = usersReq.current;
@@ -346,30 +381,54 @@ export function DevicesPage() {
     setRefreshingUsers(true);
     setUsersError(false);
     setUsersStatus("");
+    setRefreshCount(null);
     setUsersMode("refresh");
-    try {
-      await api.refreshDeviceMachineUsers(deviceId);
+    const finish = (users: any[] | null, note: string, isError = false) => {
+      stopReloadTimer();
       if (req !== usersReq.current) return;
-      setReloadIn(RELOAD_AFTER_SECONDS);
-      let left = RELOAD_AFTER_SECONDS;
+      if (users) setDeviceUsers(users);
+      setUsersError(isError);
+      setUsersStatus(note);
+      setUsersMode("");
+      setRefreshingUsers(false);
+      setRefreshCount(null);
+      loadReaderStatus(deviceId);
+    };
+    try {
+      const queued: any = await api.refreshDeviceMachineUsers(deviceId);
+      if (req !== usersReq.current) return;
+      setReloadIn(REFRESH_WAIT_SECONDS);
+      let left = REFRESH_WAIT_SECONDS;
+      let lastCount = -1;
+      let checking = false;
       reloadTimer.current = window.setInterval(async () => {
         left -= 1;
         if (req !== usersReq.current) { stopReloadTimer(); return; }
         setReloadIn(left);
-        if (left > 0) return;
-        stopReloadTimer();
-        setUsersMode("reload");
+        if ((REFRESH_WAIT_SECONDS - left) % REFRESH_CHECK_EVERY !== 0 && left > 0) return;
+        if (checking) return;
+        checking = true;
         try {
           const users = await api.getDeviceMachineUsers(deviceId);
           if (req !== usersReq.current) return;
           setDeviceUsers(users);
-          setUsersStatus(`Reloaded: ${users.length} user(s) known for this reader.`);
+          setRefreshCount(users.length);
+          const steady = users.length > 0 && users.length === lastCount;
+          lastCount = users.length;
+          if (steady || left <= 0) {
+            if (users.length > 0) {
+              finish(users, `Refreshed: ${users.length} user(s) known for this reader.`);
+            } else {
+              const s = await loadReaderStatus(deviceId);
+              finish(users, s && !s.polling
+                ? `The reader has not answered yet: it last polled ${s.last_poll_text}. The refresh stays queued; open Users again later. ${queued?.message || ""}`.trim()
+                : "The reader has not sent any users yet. It may still be answering; open Users again in a minute.");
+            }
+          }
         } catch (e) {
-          if (req !== usersReq.current) return;
-          setUsersError(true);
-          setUsersStatus(`Reload failed: ${(e as Error).message}`);
+          finish(null, `Reload failed: ${(e as Error).message}`, true);
         } finally {
-          if (req === usersReq.current) { setUsersMode(""); setRefreshingUsers(false); }
+          checking = false;
         }
       }, 1000);
     } catch (err) {
@@ -378,6 +437,22 @@ export function DevicesPage() {
       setUsersStatus(`Refresh failed: ${(err as Error).message}`);
       setUsersMode("");
       setRefreshingUsers(false);
+    }
+  };
+
+  const [sendingNames, setSendingNames] = useState(false);
+  const sendNames = async (deviceId: number) => {
+    setSendingNames(true);
+    setUsersError(false);
+    setUsersStatus("Sending names to the reader…");
+    try {
+      const r = await api.sendNamesToDevice(deviceId);
+      setUsersStatus(r.message);
+    } catch (err) {
+      setUsersError(true);
+      setUsersStatus(`Send names failed: ${(err as Error).message}`);
+    } finally {
+      setSendingNames(false);
     }
   };
 
@@ -538,6 +613,7 @@ export function DevicesPage() {
                   <div className="dev-title">
                     <h3>{row.DeviceName}</h3>
                     <span className="device-type-badge">{deviceTypeLabel(row.DeviceType)}</span>
+                    {!campus && orgNameOf(row.OrganizationId) && <span className="device-type-badge dev-org-badge">{orgNameOf(row.OrganizationId)}</span>}
                   </div>
                   <span className={"dev-status " + (online ? "is-online" : "is-offline")}>
                     <i aria-hidden />{online ? "Online" : "Offline"}
@@ -637,9 +713,23 @@ export function DevicesPage() {
             <div style={{ display: "flex", gap: 8 }}>
               <button type="button" className="btn btn-outline-reports" style={{ height: 36 }} onClick={() => refreshUsersFromDevice(selectedDeviceId)} disabled={usersMode !== ""}
                 title="Ask the reader to re-send its users and templates (push channel)">{usersMode === "refresh" || usersMode === "reload" ? <><BtnSpinner />Refreshing…</> : "Refresh from device"}</button>
+              <button type="button" className="btn btn-outline-reports" style={{ height: 36 }} disabled={usersMode !== "" || sendingNames}
+                onClick={() => sendNames(selectedDeviceId)}
+                title="Send the employee names saved on this server to the reader, so it shows them at punch time. Admin rights on the reader are kept.">
+                {sendingNames ? <><BtnSpinner />Sending…</> : "Send names to device"}
+              </button>
               <button type="button" className="btn btn-outline-reports" style={{ height: 36 }} onClick={closeUsers} disabled={usersMode === "read" || usersMode === "reload"}>Close</button>
             </div>
           </div>
+          {readerStatus && readerStatus.last_poll_seconds !== null && (
+            <p className={"dev-reader-poll " + (readerStatus.polling ? "is-ok" : "is-quiet")} role="status">
+              <i aria-hidden />
+              Reader last polled this server: <strong>{readerStatus.last_poll_text}</strong>
+              {readerStatus.polling
+                ? " · connected over Cloud/ADMS push"
+                : " · not polling right now. Commands you send are queued and applied when it reconnects; if this stays, check its network and Cloud Server / ADMS setting."}
+            </p>
+          )}
           {usersMode === "read" && (
             <>
               <LoadingNote
@@ -653,7 +743,8 @@ export function DevicesPage() {
           {usersMode === "refresh" && (
             <LoadingNote
               message={<>Asked {usersRow?.DeviceName || `device ${selectedDeviceId}`} to send its users again…</>}
-              hint={<>The reader does this on its next check-in, usually 10–60 seconds. The list reloads by itself in {reloadIn} s.</>}
+              hint={<>The reader answers over its next check-ins. The list is re-read every 10 s for up to 2 minutes
+                ({reloadIn} s left){refreshCount !== null ? <> · <strong>{refreshCount}</strong> user(s) so far</> : null}.</>}
               bar
             />
           )}
@@ -753,6 +844,16 @@ export function DevicesPage() {
                 <label htmlFor="dv-name">Device name <Req /></label>
                 <input id="dv-name" value={form.DeviceName} placeholder="e.g. Main Entrance" onChange={(e) => setForm({ ...form, DeviceName: e.target.value })} />
               </div>
+              {!campus && (
+                <div className="field">
+                  <label htmlFor="dv-org">Institution</label>
+                  <select id="dv-org" value={form.OrganizationId} onChange={(e) => setForm({ ...form, OrganizationId: e.target.value })}>
+                    <option value="">Not set (only Admin sees it)</option>
+                    {organizations.map((o) => <option key={o.OrganizationId} value={String(o.OrganizationId)}>{o.OrgName}</option>)}
+                  </select>
+                  <span className="field-hint">Campus logins (User Roles) see only their institution's devices.</span>
+                </div>
+              )}
               <div className="field">
                 <label htmlFor="dv-type">Device type</label>
                 <select id="dv-type" value={form.DeviceType} onChange={(e) => setForm({ ...form, DeviceType: e.target.value })}>

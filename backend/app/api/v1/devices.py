@@ -34,9 +34,11 @@ from app.schemas.device import (
 from app.services.attendance_ingest import fetch_and_store
 from app.services.employee_delete import blocked_pins, not_a_staff_pin, student_codes
 from app.services.bio_store import template_counts, upsert_template
+from app.services.campus_scope import devices_query, user_org_id
 from app.services.push_channel import (
-    channel_for, is_push_online, push_delete_user, push_status_message, push_users, queue_commands, queue_user_refresh,
-    sdk_reachable,
+    PUSH_ONLINE_SECONDS, channel_for, is_ai_reader, is_push_online, push_delete_user, push_reader_status,
+    push_status_message, push_users, queue_commands, queue_user_refresh, queued_note, reader_channel, sdk_reachable,
+    send_names_to_reader,
 )
 from app.services.device_sdk import (
     check_enrollment_status,
@@ -57,12 +59,17 @@ _VERIFY_MODE = {0: "PW", 1: "FP", 2: "PN", 3: "PW", 4: "CD", 15: "FA"}  # Device
 def device_comm_log(
     serial: Optional[str] = None,
     limit: int = 100,
-    _user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
 ):
     """Recent device HTTP activity (ping / handshake / poll / PUSH) — lets an
     admin watch whether a device is actually pushing attendance in real time."""
     from app.iclock.routes import get_recent_comm
-    return get_recent_comm(sn=serial, limit=max(1, min(limit, 300)))
+    rows = get_recent_comm(sn=serial, limit=max(1, min(limit, 300)))
+    if user_org_id(db, user) is not None:   # campus login: only its institution's readers
+        mine = {sn for (sn,) in devices_query(db, user, db.query(Device.SerialNumber))}
+        rows = [r for r in rows if (r.get("sn") or r.get("SN") or r.get("serial")) in mine]
+    return rows
 
 
 @router.post("/{device_id}/fetch-attendance")
@@ -83,7 +90,7 @@ def fetch_device_attendance(
     if not row.DeviceIPAddress:
         raise HTTPException(status_code=400, detail="Device IP Address is missing")
     return fetch_and_store(db, row, port)
-ONLINE_WINDOW_SECONDS = 300
+ONLINE_WINDOW_SECONDS = PUSH_ONLINE_SECONDS   # one window: the card's Online and the channel choice agree
 
 COMMAND_MAP = {
     "ClearLogs": "CLEAR LOG",
@@ -168,9 +175,9 @@ def list_devices(
     status: Optional[str] = None,
     location_id: Optional[int] = None,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
-    query = db.query(Device)
+    query = devices_query(db, user)   # campus login: only its institution's readers
     if location_id is not None:
         query = query.filter(Device.LocationId == location_id)
     rows = query.order_by(Device.DeviceId.desc()).all()
@@ -184,12 +191,15 @@ def list_devices(
 
 
 @router.post("", response_model=DeviceOut)
-def create_device(payload: DeviceCreate, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def create_device(payload: DeviceCreate, db: Session = Depends(get_db), user=Depends(get_current_user)):
     exists = db.query(Device).filter(Device.SerialNumber == payload.SerialNumber).first()
     if exists:
         raise HTTPException(status_code=400, detail="Serial number already exists")
 
     row = Device(**payload.model_dump())
+    org = user_org_id(db, user)
+    if org is not None:
+        row.OrganizationId = org   # a campus login's readers always belong to its institution
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -201,13 +211,16 @@ def update_device(
     device_id: int,
     payload: DeviceUpdate,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     row = db.query(Device).filter(Device.DeviceId == device_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Device not found")
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(row, field, value)
+    org = user_org_id(db, user)
+    if org is not None:
+        row.OrganizationId = org   # a campus login cannot move a reader to another institution
     db.commit()
     db.refresh(row)
     return _attach_status(row)
@@ -408,13 +421,16 @@ def get_device(device_id: int, db: Session = Depends(get_db), _user=Depends(get_
 
 
 @router.put("/{device_id}", response_model=DeviceOut)
-def update_device(device_id: int, payload: DeviceUpdate, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def update_device(device_id: int, payload: DeviceUpdate, db: Session = Depends(get_db), user=Depends(get_current_user)):
     row = db.query(Device).filter(Device.DeviceId == device_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Device not found")
 
     for key, value in payload.model_dump(exclude_none=True).items():
         setattr(row, key, value)
+    org = user_org_id(db, user)
+    if org is not None:
+        row.OrganizationId = org   # a campus login cannot move a reader to another institution
     db.commit()
     db.refresh(row)
     return _attach_status(row)
@@ -470,11 +486,9 @@ def get_machine_users(device_id: int, response: Response, db: Session = Depends(
     # A reader that is polling this server is answered from what it has pushed (its user table and templates):
     # instant, and the only way to see an AI-face reader's faces (the SDK cannot read those). The SDK live read is
     # kept for readers that are not pushing. (Trying the SDK first cost 20-25 s on a reader that accepts TCP 4370
-    # but refuses the SDK login, before falling back to the same push copy.)
-    if is_push_online(row):
-        channel = "push"
-    else:
-        channel = "sdk" if sdk_reachable(row) else "offline"
+    # but refuses the SDK login, before falling back to the same push copy.) An AI reader is ALWAYS answered from
+    # the push copy, even during a quiet spell: the SDK can only fail on it.
+    channel = reader_channel(row)
     t_probe = time.perf_counter() - t0
     if channel == "sdk":
         result = read_device_users(row.DeviceIPAddress, 4370, comm_key=row.CommKey)
@@ -516,10 +530,40 @@ def refresh_machine_users(device_id: int, db: Session = Depends(get_db), _user=D
     row = db.query(Device).filter(Device.DeviceId == device_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Device not found")
-    if not is_push_online(row):
+    if reader_channel(row) != "push":
         raise HTTPException(status_code=400, detail="The reader is not polling this server right now.")
     n = queue_user_refresh(db, row)
-    return {"queued": n, "message": f"{n} command(s) queued; the reader sends its users on its next polls (10-60 s)."}
+    return {"queued": n, "polling": is_push_online(row),
+            "message": f"Refresh queued; {queued_note(row)} Its users arrive over the next minute or two."}
+
+
+@router.post("/{device_id}/machine-users/send-names")
+def send_names(device_id: int, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+    """Push-channel readers: send the server's employee names to the reader (shown on it at punch time)."""
+    row = db.query(Device).filter(Device.DeviceId == device_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Device not found")
+    if reader_channel(row) != "push":
+        raise HTTPException(status_code=400, detail="The reader is not polling this server right now.")
+    r = send_names_to_reader(db, row)
+    parts = [f"{r['queued']} name(s) queued; {queued_note(row)}"]
+    if r["already_waiting"]:
+        parts.append(f"{r['already_waiting']} already waiting to be sent.")
+    if r["no_name"]:
+        parts.append(f"{r['no_name']} have no name on the server yet (name = code) - set them on the Employees page.")
+    if r["unknown_privilege"]:
+        parts.append(f"{r['unknown_privilege']} skipped until their admin/user rights on this reader are known - "
+                     f"press Refresh from device, wait for the reload, then Send names again.")
+    return {**r, "message": " ".join(parts)}
+
+
+@router.get("/{device_id}/reader-status")
+def reader_status(device_id: int, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+    """For the Users panel: when the reader last polled and what the server holds for it (explains an empty list)."""
+    row = db.query(Device).filter(Device.DeviceId == device_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return push_reader_status(db, row)
 
 
 class DiagnosticsIn(BaseModel):
@@ -547,7 +591,7 @@ def device_diagnostics(
     row = db.query(Device).filter(Device.DeviceId == device_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Device not found")
-    if not is_push_online(row):
+    if reader_channel(row) != "push":
         raise HTTPException(status_code=400, detail="The reader is not polling this server right now.")
     commands = ["INFO", "CHECK", "DATA QUERY tablename=user,fielddesc=*,filter=*"]
     pin = (payload.pin or "").strip()
@@ -855,6 +899,11 @@ def pull_machine_user_photo(
     row = db.query(Device).filter(Device.DeviceId == device_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Device not found")
+    if is_ai_reader(row):
+        # The SDK cannot log in to an AI-face reader; its photos reach the server when it uploads its users.
+        raise HTTPException(status_code=400, detail=(
+            "This AI-face reader cannot be read directly (SDK). Its photos come to the server with its user upload: "
+            "press Refresh from device, wait for the list to reload, then View photo."))
     if not row.DeviceIPAddress:
         raise HTTPException(status_code=400, detail="Device IP Address is missing")
 
@@ -982,18 +1031,23 @@ def delete_machine_user(
     row = db.query(Device).filter(Device.DeviceId == device_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Device not found")
-    if not row.DeviceIPAddress:
-        raise HTTPException(status_code=400, detail="Device IP Address is missing")
 
     employee_code = employee_code.strip()
     if not employee_code:
         raise HTTPException(status_code=400, detail="Employee code is required")
 
-    if not sdk_reachable(row, port) and is_push_online(row):
+    # A reader that is polling this server is deleted through the push channel - the same channel its Users
+    # list is read from. (Deleting over the SDK only when port 4370 was unreachable sent AI-face readers, which
+    # answer on 4370 but refuse the SDK login, down the SDK path: the delete failed and the user stayed.)
+    if reader_channel(row, port) == "push":
         push_delete_user(db, row, employee_code)
+        db.commit()
         return DeviceMachineUserDeleteResponse(
             DeviceId=row.DeviceId, EmployeeCode=employee_code, connected=True, deleted=True,
-            message="Delete command queued; the reader removes the user on its next poll (10-60 s).")
+            message=f"Delete queued; {queued_note(row)}")
+
+    if not row.DeviceIPAddress:
+        raise HTTPException(status_code=400, detail="Device IP Address is missing")
 
     result = delete_device_user(row.DeviceIPAddress, employee_code, port, comm_key=row.CommKey)
     verify_result = read_device_users(row.DeviceIPAddress, port, comm_key=row.CommKey)

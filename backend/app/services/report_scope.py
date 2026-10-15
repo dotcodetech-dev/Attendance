@@ -13,7 +13,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from fastapi import Query
+from fastapi import Depends, Query
+from sqlalchemy.orm import Session
+
+from app.core.security import get_current_user
+from app.database import get_db
+from app.models.entities import User
+from app.services.campus_scope import user_org_id
 
 
 @dataclass(frozen=True)
@@ -33,11 +39,15 @@ def report_scope(
     employee_type_id: Optional[int] = Query(default=None),
     school_id: Optional[int] = Query(default=None),
     category_id: Optional[int] = Query(default=None, description="Attendance category id; 0 = employees without one"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> ReportScope:
+    # A campus-role login (User Roles) only ever reports on its own institution, whatever the filter says.
+    campus_org = user_org_id(db, user)
     return ReportScope(
         department=(department or "").strip() or None,
         designation=(designation or "").strip() or None,
-        organization_id=organization_id,
+        organization_id=campus_org if campus_org is not None else organization_id,
         employee_type_id=employee_type_id,
         school_id=school_id,
         category_id=category_id,

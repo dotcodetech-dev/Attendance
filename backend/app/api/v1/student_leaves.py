@@ -30,6 +30,12 @@ class LeaveRequestIn(BaseModel):
     FromDate: date
     ToDate: date
     Reason: Optional[str] = None
+    # True = entered by the office as already approved (OD / leave entry): counts in attendance at once.
+    Approve: bool = False
+
+
+# Statuses that hold the days: a new leave may not overlap these.
+_HOLDING = ("Pending", "Approved")
 
 
 class DecisionIn(BaseModel):
@@ -121,18 +127,60 @@ def list_requests(
     ]
 
 
+def _refresh_attendance(db: Session, r: StudentLeaveRequest) -> None:
+    """Recompute the Auto rows of the leave's days so attendance shows (or stops showing) it at once."""
+    from app.services.student_attendance_service import process_range
+    try:
+        process_range(db, r.FromDate, r.ToDate, [r.StudentCode])
+    except ValueError:
+        pass
+
+
 @router.post("/requests")
-def create_request(p: LeaveRequestIn, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def create_request(p: LeaveRequestIn, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if p.ToDate < p.FromDate:
         raise HTTPException(400, "To date is before from date")
     if not db.query(Student.StudentId).filter(Student.StudentCode == p.StudentCode).first():
         raise HTTPException(404, "Student not found")
-    if not db.get(StudentLeaveConfig, p.StudentLeaveConfigId):
-        raise HTTPException(404, "Leave type not found")
-    r = StudentLeaveRequest(**p.model_dump(), Status="Pending")
+    cfg = db.get(StudentLeaveConfig, p.StudentLeaveConfigId)
+    if not cfg or cfg.IsActive != "Y":
+        raise HTTPException(404, "Leave type not found or inactive")
+    clash = (
+        db.query(StudentLeaveRequest)
+        .filter(StudentLeaveRequest.StudentCode == p.StudentCode,
+                StudentLeaveRequest.Status.in_(_HOLDING),
+                StudentLeaveRequest.FromDate <= p.ToDate,
+                StudentLeaveRequest.ToDate >= p.FromDate)
+        .first()
+    )
+    if clash:
+        raise HTTPException(400, f"This student already has leave from {clash.FromDate:%d-%m-%Y} to "
+                                 f"{clash.ToDate:%d-%m-%Y} ({clash.Status.lower()}). Cancel it first or pick other dates.")
+    data = p.model_dump(exclude={"Approve"})
+    r = StudentLeaveRequest(**data, Status="Approved" if p.Approve else "Pending",
+                            DecidedBy=getattr(user, "LoginName", None) if p.Approve else None)
     db.add(r)
     db.commit()
+    if p.Approve:
+        _refresh_attendance(db, r)
     return {"StudentLeaveRequestId": r.StudentLeaveRequestId, "Status": r.Status}
+
+
+@router.post("/requests/{request_id}/cancel")
+def cancel_request(request_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Undo a leave / OD (e.g. entered by mistake). Kept for the record; those days are recalculated."""
+    r = db.get(StudentLeaveRequest, request_id)
+    if not r:
+        raise HTTPException(404, "Request not found")
+    if r.Status not in _HOLDING:
+        raise HTTPException(400, f"This request is already {r.Status.lower()}.")
+    was_approved = r.Status == "Approved"
+    r.Status = "Cancelled"
+    r.DecidedBy = getattr(user, "LoginName", None)
+    db.commit()
+    if was_approved:
+        _refresh_attendance(db, r)
+    return {"ok": True, "Status": r.Status}
 
 
 @router.post("/requests/{request_id}/decision")
@@ -142,14 +190,11 @@ def decide(request_id: int, p: DecisionIn, db: Session = Depends(get_db), user=D
     r = db.get(StudentLeaveRequest, request_id)
     if not r:
         raise HTTPException(404, "Request not found")
+    if r.Status != "Pending":
+        raise HTTPException(400, f"This request is already {r.Status.lower()}.")
     r.Status = p.status
     r.DecidedBy = getattr(user, "LoginName", None)
     db.commit()
     if p.status == "Approved":
-        # Refresh Auto rows so the leave shows in attendance immediately.
-        from app.services.student_attendance_service import process_range
-        try:
-            process_range(db, r.FromDate, r.ToDate, [r.StudentCode])
-        except ValueError:
-            pass
+        _refresh_attendance(db, r)   # the leave shows in attendance immediately
     return {"ok": True, "Status": r.Status}

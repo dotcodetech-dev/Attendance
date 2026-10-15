@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
-import { EmployeeSelect, useEmployees } from "../components/EmployeeSelect";
+import { EmployeeSearch, EmployeeSelect, useEmployees } from "../components/EmployeeSelect";
 import { Flash, SectionHead, fmtDate } from "../components/ConfigUi";
 import { Icons } from "../components/SidebarIcons";
 import { Req } from "../components/Req";
@@ -24,7 +24,11 @@ type LeaveBalance = {
   AvailableDays: number;
   IsPaid: string;
   IsActive: string;
+  Unlimited?: boolean; // 0 days per year on the type = no yearly limit (OD, LOP ...)
 };
+
+/** Days that can still be taken, or Infinity for a type with no yearly limit. */
+const left = (b: LeaveBalance) => (b.Unlimited ? Infinity : b.AvailableDays);
 
 type LeaveRow = {
   LeaveRequestId: number;
@@ -56,7 +60,12 @@ const statusBadge = (s: string) => {
 const statusLabel = (s: string) =>
   s === "Pending" ? "Waiting for HOD / Manager" : s === "HodApproved" ? "Waiting for Principal / Director" : s;
 
-export function EssLeavesPage() {
+/**
+ * "apply": an employee's leave application (goes through HOD / Principal approval).
+ * "admin": Leave Entry - an admin enters leave for anyone; it is saved as Approved at once and can be cancelled.
+ */
+export function EssLeavesPage({ mode = "apply" }: { mode?: "apply" | "admin" }) {
+  const admin = mode === "admin";
   const employees = useEmployees();
   const [employeeCode, setEmployeeCode] = useState("");
   const [year, setYear] = useState<number>(new Date().getFullYear());
@@ -122,6 +131,8 @@ export function EssLeavesPage() {
     load(code); // loading straight away saves a click
   };
 
+  const empName = employees.find((e) => String(e.EmployeeCode) === employeeCode)?.EmployeeName;
+
   const handleApply = async (event: FormEvent) => {
     event.preventDefault();
     setStatus(null);
@@ -130,38 +141,58 @@ export function EssLeavesPage() {
     if (!form.LeaveConfigId) { setStatus({ text: "Choose a leave type.", ok: false }); return; }
     if (!form.FromDate || !form.ToDate) { setStatus({ text: "Choose both the from and to dates.", ok: false }); return; }
     if (requestedDays <= 0) { setStatus({ text: "The to date is before the from date.", ok: false }); return; }
-    if (selectedBalance && requestedDays > selectedBalance.AvailableDays) {
+    if (selectedBalance && requestedDays > left(selectedBalance)) {
       setStatus({ text: `Not enough balance. ${selectedBalance.AvailableDays} day(s) available for ${selectedBalance.Code}.`, ok: false });
       return;
     }
     setApplying(true);
     try {
-      await api.applyLeave({
+      const payload = {
         EmployeeCode: code,
         LeaveConfigId: Number(form.LeaveConfigId),
         FromDate: `${form.FromDate}T00:00:00`,
         ToDate: `${form.ToDate}T00:00:00`,
         Reason: form.Reason.trim() || null,
-      });
-      setStatus({ text: "Leave applied successfully.", ok: true });
+      };
+      if (admin) {
+        await api.adminLeaveEntry(payload);
+        setStatus({ text: `${selectedBalance?.Code || "Leave"} saved and approved for ${empName || code}. Attendance for those days is updated.`, ok: true });
+      } else {
+        await api.applyLeave(payload);
+        setStatus({ text: "Leave applied successfully.", ok: true });
+      }
       setForm(blankForm);
       await load(code);
     } catch (err: any) {
-      setStatus({ text: err?.message || "Failed to apply leave.", ok: false });
+      setStatus({ text: err?.message || (admin ? "Failed to save leave." : "Failed to apply leave."), ok: false });
     } finally {
       setApplying(false);
     }
   };
 
-  const empName = employees.find((e) => String(e.EmployeeCode) === employeeCode)?.EmployeeName;
-  const after = selectedBalance ? selectedBalance.AvailableDays - requestedDays : null;
+  const cancelLeave = async (row: LeaveRow, label: string) => {
+    if (!window.confirm(`Cancel ${label} from ${fmtDate(row.FromDate)} to ${fmtDate(row.ToDate)}? The days go back to the balance and attendance is recalculated.`)) return;
+    try {
+      await api.cancelLeave(row.LeaveRequestId);
+      setStatus({ text: `${label} cancelled.`, ok: true });
+      await load(employeeCode);
+    } catch (err: any) {
+      setStatus({ text: err?.message || "Failed to cancel leave.", ok: false });
+    }
+  };
+
+  const after = selectedBalance && !selectedBalance.Unlimited ? selectedBalance.AvailableDays - requestedDays : null;
 
   return (
     <div>
       <div className="page-head">
         <div>
-          <h2>My Leaves</h2>
-          <p className="sub">Check leave balances and apply for leave. A leave cannot be applied once its balance is used up.</p>
+          <h2>{admin ? "Leave Entry" : "My Leaves"}</h2>
+          <p className="sub">
+            {admin
+              ? "Enter leave for any employee: pick the person, the leave type and the dates. It is saved as approved straight away (no HOD / Principal step) and shows in attendance and reports."
+              : "Check leave balances and apply for leave. A leave cannot be applied once its balance is used up."}
+          </p>
         </div>
       </div>
 
@@ -169,7 +200,9 @@ export function EssLeavesPage() {
         <div className="hours-row" style={{ marginBottom: 0 }}>
           <div style={{ flex: "1 1 280px", minWidth: 0 }}>
             <label className="field-label" htmlFor="lv-emp">Employee <Req /></label>
-            <EmployeeSelect id="lv-emp" employees={employees} value={employeeCode} onChange={pickEmployee} style={{ width: "100%" }} />
+            {admin
+              ? <EmployeeSearch id="lv-emp" employees={employees} value={employeeCode} onChange={(c) => (c ? pickEmployee(c) : setEmployeeCode(""))} style={{ width: "100%" }} />
+              : <EmployeeSelect id="lv-emp" employees={employees} value={employeeCode} onChange={pickEmployee} style={{ width: "100%" }} />}
           </div>
           <div>
             <label className="field-label" htmlFor="lv-year">Year</label>
@@ -191,11 +224,13 @@ export function EssLeavesPage() {
           <div className="lb-grid">
             {balances.map((item) => {
               const used = item.MaxPerYear ? Math.min(100, (item.UsedDays / item.MaxPerYear) * 100) : 0;
-              const out = item.AvailableDays <= 0;
+              const out = left(item) <= 0;
               return (
                 <div key={item.LeaveConfigId} className={"lb-card" + (out ? " is-out" : "")}>
                   <div className="lb-top"><span className="lt-code lt-code-sm" style={{ margin: 0 }}>{item.Code}</span><span>{item.Name}</span></div>
-                  <div className="lb-num"><b>{item.AvailableDays}</b><span>of {item.MaxPerYear} left</span></div>
+                  {item.Unlimited
+                    ? <div className="lb-num"><b>∞</b><span>no yearly limit</span></div>
+                    : <div className="lb-num"><b>{item.AvailableDays}</b><span>of {item.MaxPerYear} left</span></div>}
                   <div className="lb-bar" aria-hidden><span style={{ width: `${used}%` }} /></div>
                   <div className="sd-sub">{item.UsedDays} used</div>
                 </div>
@@ -205,15 +240,15 @@ export function EssLeavesPage() {
           </div>
 
           <form onSubmit={handleApply} className="section-card">
-            <SectionHead icon={Icons.leaves} title="Apply for leave" desc={empName ? `For ${empName}` : "Choose the type and dates"} />
+            <SectionHead icon={Icons.leaves} title={admin ? "Enter leave (approved)" : "Apply for leave"} desc={empName ? `For ${empName}` : "Choose the type and dates"} />
             <div className="emp-grid">
               <div className="field">
                 <label htmlFor="lv-type">Leave type <Req /></label>
                 <select id="lv-type" value={form.LeaveConfigId} onChange={(e) => setForm({ ...form, LeaveConfigId: Number(e.target.value) })}>
                   <option value={0}>Select leave type…</option>
                   {balances.map((item) => (
-                    <option key={item.LeaveConfigId} value={item.LeaveConfigId} disabled={item.AvailableDays <= 0}>
-                      {item.Code} · {item.Name} ({item.AvailableDays} left)
+                    <option key={item.LeaveConfigId} value={item.LeaveConfigId} disabled={left(item) <= 0}>
+                      {item.Code} · {item.Name} ({item.Unlimited ? "no limit" : `${item.AvailableDays} left`})
                     </option>
                   ))}
                 </select>
@@ -240,27 +275,31 @@ export function EssLeavesPage() {
                     {[preview.skipped_weekly_off ? `${preview.skipped_weekly_off} weekly off` : "", preview.skipped_holidays ? `${preview.skipped_holidays} holiday` : ""].filter(Boolean).join(" and ")} not counted
                   </span>
                 )}
-                <span>
-                  {selectedBalance.Code} balance {selectedBalance.AvailableDays} → {after !== null ? Math.max(after, 0) : 0}
-                  {after !== null && after < 0 ? ` (short by ${-after})` : ""}
-                </span>
+                {selectedBalance.Unlimited ? (
+                  <span>{selectedBalance.Code} has no yearly limit</span>
+                ) : (
+                  <span>
+                    {selectedBalance.Code} balance {selectedBalance.AvailableDays} → {after !== null ? Math.max(after, 0) : 0}
+                    {after !== null && after < 0 ? ` (short by ${-after})` : ""}
+                  </span>
+                )}
               </div>
             )}
 
             <div style={{ marginTop: 18 }}>
-              <button type="submit" className="btn btn-primary-purple" disabled={applying || (!!selectedBalance && selectedBalance.AvailableDays <= 0)}>
-                {applying ? "Applying…" : "Apply leave"}
+              <button type="submit" className="btn btn-primary-purple" disabled={applying || (!!selectedBalance && left(selectedBalance) <= 0)}>
+                {admin ? (applying ? "Saving…" : "Save leave") : (applying ? "Applying…" : "Apply leave")}
               </button>
             </div>
           </form>
 
           <div className="section-card cfg-table-card">
-            <div className="cfg-toolbar"><strong>Leave requests</strong><span className="cfg-count">{rows.length}</span></div>
+            <div className="cfg-toolbar"><strong>{admin ? "Leaves of this employee" : "Leave requests"}</strong><span className="cfg-count">{rows.length}</span></div>
             {rows.length === 0 ? (
-              <div className="cfg-empty"><strong>No leave requests yet</strong><span>Requests you apply for will be listed here with their status.</span></div>
+              <div className="cfg-empty"><strong>No leave requests yet</strong><span>{admin ? "Leaves you enter will be listed here." : "Requests you apply for will be listed here with their status."}</span></div>
             ) : (
               <table className="table cfg-table">
-                <thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th></tr></thead>
+                <thead><tr><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th><th>Reason</th>{admin && <th />}</tr></thead>
                 <tbody>
                   {rows.map((row) => {
                     const config = leaveConfigs.find((item) => item.LeaveConfigId === row.LeaveConfigId);
@@ -272,6 +311,13 @@ export function EssLeavesPage() {
                         <td>{dayCount(row.FromDate.slice(0, 10), row.ToDate.slice(0, 10))}</td>
                         <td><span className={"badge " + statusBadge(row.Status)}>{statusLabel(row.Status)}</span></td>
                         <td>{row.Reason || "—"}</td>
+                        {admin && (
+                          <td>
+                            {!["Rejected", "Cancelled"].includes(row.Status) && (
+                              <button type="button" className="btn-outline-gray" onClick={() => cancelLeave(row, config?.Code || "Leave")}>Cancel</button>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     );
                   })}

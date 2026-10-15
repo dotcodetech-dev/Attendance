@@ -100,7 +100,7 @@ export function DailyAttendancePage() {
               <table className="table table-compact" ref={tableRef}>
                 <thead>
                   <tr>
-                    <IdHead /><th>Status</th><th>Shift</th>
+                    <IdHead /><th>Status</th><th>Category</th>
                     <th className="num">In</th><th className="num">Out</th><th className="num">Late (min)</th><th>Remarks</th>
                   </tr>
                 </thead>
@@ -108,7 +108,7 @@ export function DailyAttendancePage() {
                   <tr key={e.FaceId ?? e.EmployeeCode}>
                     <IdCells e={e} />
                     <td>{statusBadge(e)}</td>
-                    <td>{e.ShiftName || ""}</td>
+                    <td>{e.CategoryName || ""}</td>
                     <td className="num">{e.FirstIn || "—"}</td>
                     <td className="num">{e.LastOut || "—"}</td>
                     <td className="num" style={{ color: (e.LateMinutes || 0) > 0 ? "#b45309" : undefined }}>{e.LateMinutes || 0}</td>

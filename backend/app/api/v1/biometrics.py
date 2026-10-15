@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
+from app.services.campus_scope import check_job, check_transfer, deny_for_campus, job_visible, user_org_id
 from app.database import get_db
 from app.models.entities import (
     Device, DeviceCommand, DeviceEmployee,
@@ -139,6 +140,11 @@ def _queue_phase_commands(
         finger_bio = next((r for r in bio_rows if (r.BioName or "").upper() == "FINGER"), None)
         face_photo = _face_photo_row(db, code)
         photo_row = _profile_photo_row(db, code)
+        # The picture a reader shows when the person punches is its USERPIC. AI-face readers usually only upload
+        # the photo they enrolled the face from (BIOPHOTO), so without a profile photo that one is sent as the
+        # USERPIC - otherwise a transferred face is recognised but punches with a blank picture.
+        display_photo = photo_row if (photo_row and photo_row.PhotoData) else (
+            face_photo if (face_photo and face_photo.PhotoData) else None)
 
         for device_id in target_device_ids:
             if source_device_id and source_device_id == device_id:
@@ -208,6 +214,9 @@ def _queue_phase_commands(
             if phase == "face":
                 if job.IncludeFace == "Y":
                     _add_face()
+                    # The punch-time picture goes with the face, unless the Photo step will send it.
+                    if job.IncludePhoto != "Y" and display_photo and _accepts_face_photo(target):
+                        _add("Transfer Photo", f"ENROLL PHOTO {code}", display_photo.PhotoData, "face")
                 # In non-sequential mode also queue finger here
                 if job.SequentialBiometrics == "N" and job.IncludeFinger == "Y":
                     _add_fingers()
@@ -220,8 +229,9 @@ def _queue_phase_commands(
                     _add("Transfer Card", f"ENROLL CARD {code} {employee.EmployeeRFIDNumber}")
 
             elif phase == "photo":
+                if display_photo:
+                    _add("Transfer Photo", f"ENROLL PHOTO {code}", display_photo.PhotoData)
                 if photo_row and photo_row.PhotoData:
-                    _add("Transfer Photo", f"ENROLL PHOTO {code}", photo_row.PhotoData)
                     # No face of any kind stored, but a photo is: let an AI reader enrol the face
                     # from it (eTimeTrackLite "Upload Bio Photo"). The reader checks the photo
                     # quality itself and answers with an error code when it is unusable.
@@ -414,8 +424,9 @@ def _job_to_dict(job: TransferJob, db: Session) -> dict:
 def transfer_biometrics(
     payload: TransferRequest,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
+    check_transfer(db, user, payload)   # campus login: its own readers and staff only
     """
     Create a TransferJob and queue the first phase of biometric commands.
     When sequential_biometrics=True (default): face commands are queued first;
@@ -565,7 +576,8 @@ def get_auto_sync(db: Session = Depends(get_db), _user=Depends(get_current_user)
 
 
 @router.put("/auto-sync")
-def put_auto_sync(payload: AutoSyncIn, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def put_auto_sync(payload: AutoSyncIn, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    deny_for_campus(db, user, "Changing auto-sync (all readers)")
     set_auto_sync(db, payload.enabled)
     db.commit()
     return {"enabled": payload.enabled}
@@ -615,7 +627,7 @@ def _command_to_sdk_op(cmd: DeviceCommand, db: Session) -> dict | None:
 def execute_transfer_job_via_sdk(
     job_id: int,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     """
     Deliver this job's queued commands directly to the target devices over the
@@ -623,6 +635,7 @@ def execute_transfer_job_via_sdk(
     /iclock push endpoints. Runs phase by phase until the job completes.
     """
     job = db.query(TransferJob).filter(TransferJob.TransferJobId == job_id).first()
+    check_job(db, user, job)   # campus login: only jobs between its own readers
     if not job:
         raise HTTPException(404, "Transfer job not found")
 
@@ -715,10 +728,11 @@ def execute_transfer_job_via_sdk(
 @router.get("/transfer-jobs")
 def list_transfer_jobs(
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     """Return the 20 most recent transfer jobs."""
-    jobs = db.query(TransferJob).order_by(TransferJob.TransferJobId.desc()).limit(20).all()
+    jobs = db.query(TransferJob).order_by(TransferJob.TransferJobId.desc()).limit(200 if user_org_id(db, user) else 20).all()
+    jobs = [j for j in jobs if job_visible(db, user, j)][:20]
     return [_job_to_dict(j, db) for j in jobs]
 
 
@@ -726,7 +740,7 @@ def list_transfer_jobs(
 def get_transfer_job(
     job_id: int,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     """
     Poll this endpoint every 5 seconds from the frontend.
@@ -737,6 +751,7 @@ def get_transfer_job(
         (this is the gate that prevents face + finger running simultaneously)
     """
     job = db.query(TransferJob).filter(TransferJob.TransferJobId == job_id).first()
+    check_job(db, user, job)   # campus login: only jobs between its own readers
     if not job:
         raise HTTPException(404, "Transfer job not found.")
 
@@ -750,13 +765,14 @@ def get_transfer_job(
 def retry_transfer_job(
     job_id: int,
     db: Session = Depends(get_db),
-    _user=Depends(get_current_user),
+    user=Depends(get_current_user),
 ):
     """
     Reset all permanently-failed commands back to Pending so the device
     can retry them. Use this after a prolonged communication outage.
     """
     job = db.query(TransferJob).filter(TransferJob.TransferJobId == job_id).first()
+    check_job(db, user, job)   # campus login: only jobs between its own readers
     if not job:
         raise HTTPException(404, "Transfer job not found.")
 

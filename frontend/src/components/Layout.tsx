@@ -6,6 +6,7 @@ import { Icons } from "./SidebarIcons";
 import { api, CONNECTION_ISSUE_EVENT, CONNECTION_OK_EVENT, SESSION_EXPIRED_EVENT } from "../api/client";
 import { clearToken, getUsername } from "../store/auth";
 import { Features, FeaturesProvider, useFeatures } from "../store/features";
+import { MeProvider, useMe } from "../store/me";
 import { OrgProvider, useOrg } from "../store/org";
 
 type NavEntry = { to: string; icon: React.ReactNode; label: string };
@@ -63,6 +64,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/ess/my-attendance", icon: Icons.calendar, label: "My Attendance" },
       { to: "/ess/my-leaves", icon: Icons.leaves, label: "My Leaves" },
       { to: "/ess/leave-approvals", icon: Icons.roles, label: "Leave Approvals" },
+      { to: "/ess/leave-entry", icon: Icons.leaves, label: "Leave Entry (Admin)" },
       { to: "/ess/manual-entry", icon: Icons.edit, label: "Manual Entry / OD" },
     ],
   },
@@ -113,6 +115,27 @@ const visibleGroups = (features: Features): NavGroup[] => {
   return [...groups.slice(0, at), students, ...groups.slice(at)];
 };
 
+// Permission switch (User Roles) behind each menu. Only a campus role is limited by them; Admin, Manager and
+// Employee keep every menu, as before. Keys a campus role does not list (configuration, students, mess) stay hidden.
+function permOf(path: string): string {
+  if (path === "/") return "dashboard";
+  if (path === "/employees") return "employees";
+  if (path === "/devices") return "devices";
+  if (path === "/enrollment" || path === "/face") return "enrollment";
+  if (path === "/transfer") return "transfer";
+  if (path === "/commands") return "commands";
+  if (path === "/logs") return "logs";
+  if (path.startsWith("/reports/")) return "reports";
+  if (path === "/ess/my-attendance") return "ess_attendance";
+  if (path === "/ess/my-leaves") return "ess_leaves";
+  if (path === "/ess/leave-approvals") return "leave_approvals";
+  if (path === "/ess/leave-entry") return "leave_entry";
+  if (path === "/ess/manual-entry") return "ess_manual_entry";
+  if (path.startsWith("/students")) return "students";
+  if (path.startsWith("/mess")) return "mess";
+  return "config";
+}
+
 const TITLE_BY_PATH: Record<string, string> = (() => {
   const map: Record<string, string> = {};
   TOP_ITEMS.forEach((i) => (map[i.to] = i.label));
@@ -155,6 +178,10 @@ function NavItem({ to, icon, children }: { to: string; icon: React.ReactNode; ch
 
 function ProfileMenu({ onLogout }: { onLogout: () => void }) {
   const username = getUsername() || "Administrator";
+  const { me } = useMe();
+  const roleLine = me?.campus
+    ? `${me.campus.role} · ${me.campus.organization_id ? (me.campus.organization_name || "one institution") : "All institutions"}`
+    : me?.role ? `Signed in · ${me.role}` : "Signed in";
   const initial = username.charAt(0).toUpperCase();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -219,7 +246,7 @@ function ProfileMenu({ onLogout }: { onLogout: () => void }) {
             <span className="profile-avatar lg">{initial}</span>
             <div>
               <div className="profile-name">{username}</div>
-              <div className="profile-role">Signed in</div>
+              <div className="profile-role">{roleLine}</div>
             </div>
           </div>
 
@@ -272,7 +299,9 @@ export function Layout() {
   return (
     <OrgProvider>
       <FeaturesProvider>
-        <LayoutInner />
+        <MeProvider>
+          <LayoutInner />
+        </MeProvider>
       </FeaturesProvider>
     </OrgProvider>
   );
@@ -317,7 +346,26 @@ function LayoutInner() {
   }, []);
 
   const { features } = useFeatures();
-  const navGroups = useMemo(() => visibleGroups(features), [features]);
+  const { me, can } = useMe();
+  // A campus role sees only the menus its switches allow (and groups that still have something in them).
+  const navGroups = useMemo(
+    () => visibleGroups(features)
+      .map((g) => ({ ...g, items: g.items.filter((i) => can(permOf(i.to))) }))
+      .filter((g) => g.items.length > 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [features, me],
+  );
+  const topItems = TOP_ITEMS.filter((i) => can(permOf(i.to)));
+
+  // A custom role (e.g. Leave Section: reports + leave entry) that lands on a page it has no menu for - the
+  // Dashboard right after sign-in, or an old bookmark - goes to its first allowed page instead.
+  const firstAllowed = topItems[0]?.to ?? navGroups[0]?.items[0]?.to ?? null;
+  useEffect(() => {
+    if (me?.campus && !can(permOf(pathname)) && firstAllowed && firstAllowed !== pathname) {
+      navigate(firstAllowed, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me, pathname, firstAllowed]);
 
   const activeGroup = GROUP_OF_PATH[pathname];
   // Accordion: only one group open at a time. Start with the group that holds
@@ -344,7 +392,7 @@ function LayoutInner() {
         </div>
 
         <nav className="sidebar-nav">
-          {TOP_ITEMS.map((i) => (
+          {topItems.map((i) => (
             <NavItem key={i.to} to={i.to} icon={i.icon}>{i.label}</NavItem>
           ))}
 

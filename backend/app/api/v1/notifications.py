@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.feature_flags import student_leaves_enabled
 from app.core.security import get_current_user
+from app.services.campus_scope import devices_query
 from app.database import get_db
 from app.models.entities import Device, LeaveRequest, ManualEntry, StudentLeaveRequest
 
@@ -35,7 +36,7 @@ def list_notifications(db: Session = Depends(get_db), user=Depends(get_current_u
 
     # Offline devices (same 5-minute heartbeat rule as the dashboard).
     threshold = now - timedelta(minutes=5)
-    offline = [d for d in db.query(Device).all() if not (d.LastPing and d.LastPing >= threshold)]
+    offline = [d for d in devices_query(db, user).all() if not (d.LastPing and d.LastPing >= threshold)]
     if offline:
         worst = min(offline, key=lambda d: d.LastPing or datetime.min)
         if not worst.LastPing:

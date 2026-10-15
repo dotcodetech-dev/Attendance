@@ -120,8 +120,13 @@ class EmployeeService:
             cat = self._category_repo.get_by_id(values["CategoryId"])
             if not cat:
                 raise HTTPException(status_code=400, detail="Category not found")
+        old_name = row.EmployeeName
         for key, value in values.items():
             setattr(row, key, value)
+        if row.EmployeeName != old_name:
+            # The new name reaches every reader the person is on (shown on the reader at punch time).
+            from app.services.push_channel import queue_name_change
+            queue_name_change(self._session, row)
         return self._repo.update(row)
 
     def change_code(self, employee_id: int, new_code: str) -> dict:

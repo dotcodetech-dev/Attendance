@@ -1,14 +1,14 @@
 /**
  * Print for the two college muster reports (Attendance Time / Time & Leave), laid out like the printed form:
- * centred institute heading, yellow column heads, dashed grid, three lines (IN / OUT / worked) per employee,
+ * centred institute heading, yellow column heads, dashed grid, two lines (IN / OUT) per employee,
  * a heading per department with S.No restarting at 1. The PDF and Excel downloads use the same layout (backend).
  */
 const esc = (v: unknown) =>
   String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-const lines = (cell: string): [string, string, string] => {
+const lines = (cell: string): [string, string] => {
   const p = (cell || "").split("\n");
-  return [p[0] || "", p[1] || "", p[2] || ""];
+  return [p[0] || "", p[1] || ""];
 };
 
 export function printMuster(data: any, org: { OrgName?: string; OrgAddress?: string } | null, withLeave: boolean) {
@@ -32,7 +32,6 @@ export function printMuster(data: any, org: { OrgName?: string; OrgAddress?: str
     return `<tbody class="emp">
 <tr><td class="c">${sno}</td><td class="b">${esc(e.EmployeeCode)}</td><td class="c b">${esc(e.EmployeeName)}</td>${range.map((i) => cell(i, 0)).join("")}${counts}${tail}</tr>
 <tr>${blanks(3)}${range.map((i) => cell(i, 1)).join("")}${tailBlank}</tr>
-<tr>${blanks(3)}${range.map((i) => `<td class="b">${esc(ls[i][2])}</td>`).join("")}${tailBlank}</tr>
 </tbody>`;
   };
 

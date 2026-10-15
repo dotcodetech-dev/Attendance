@@ -228,6 +228,8 @@ COMPAT_SCHEMA_SQL = """
     END
 
     IF COL_LENGTH('dbo.devices', 'CommKey') IS NULL ALTER TABLE dbo.devices ADD CommKey INT NULL;
+    -- Institution of a reader (campus-role logins see only their institution's readers).
+    IF COL_LENGTH('dbo.devices', 'OrganizationId') IS NULL ALTER TABLE dbo.devices ADD OrganizationId INT NULL;
 
     IF OBJECT_ID('dbo.devices', 'U') IS NOT NULL
        AND COL_LENGTH('dbo.devices', 'DeviceIPAddress') IS NULL
