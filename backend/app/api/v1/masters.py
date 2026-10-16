@@ -1,4 +1,4 @@
-"""Master lists: organizations, per-organization departments, employee types."""
+"""Master lists: Organization > School > Department, designations, employee types, student options."""
 from __future__ import annotations
 
 from typing import Optional
@@ -25,6 +25,7 @@ class DepartmentIn(BaseModel):
     OrganizationId: int
     DepartmentName: str
     IsActive: Optional[str] = "Y"
+    SchoolId: Optional[int] = None   # sent = link (or null to unlink); left out = unchanged
 
 
 class EmployeeTypeIn(BaseModel):
@@ -35,6 +36,7 @@ class EmployeeTypeIn(BaseModel):
 class SchoolIn(BaseModel):
     SchoolName: str
     IsActive: Optional[str] = "Y"
+    OrganizationId: Optional[int] = None   # sent = link (or null to unlink); left out = unchanged
 
 
 class DesignationIn(BaseModel):
@@ -91,6 +93,7 @@ def update_organization(org_id: int, payload: OrganizationIn, db: Session = Depe
 @router.get("/departments")
 def list_departments(
     organization_id: Optional[int] = Query(default=None),
+    school_id: Optional[int] = Query(default=None),
     include_inactive: bool = False,
     db: Session = Depends(get_db),
     _user=Depends(get_current_user),
@@ -98,6 +101,8 @@ def list_departments(
     q = db.query(DepartmentMaster)
     if organization_id is not None:
         q = q.filter(DepartmentMaster.OrganizationId == organization_id)
+    if school_id is not None:
+        q = q.filter(DepartmentMaster.SchoolId == school_id)
     if not include_inactive:
         q = q.filter((DepartmentMaster.IsActive.is_(None)) | (DepartmentMaster.IsActive == "Y"))
     return [
@@ -106,9 +111,27 @@ def list_departments(
             "OrganizationId": d.OrganizationId,
             "DepartmentName": d.DepartmentName,
             "IsActive": d.IsActive or "Y",
+            "SchoolId": d.SchoolId,
         }
         for d in q.order_by(DepartmentMaster.DepartmentName).all()
     ]
+
+
+def _dept_dto(d: DepartmentMaster) -> dict:
+    return {"DepartmentId": d.DepartmentId, "OrganizationId": d.OrganizationId, "DepartmentName": d.DepartmentName,
+            "IsActive": d.IsActive, "SchoolId": d.SchoolId}
+
+
+def _school_for_department(db: Session, school_id: Optional[int], org_id: int) -> Optional[School]:
+    """A department's school must exist and, once the school has an institution, be in the department's."""
+    if school_id is None:
+        return None
+    school = db.get(School, school_id)
+    if school is None:
+        raise HTTPException(404, "School not found")
+    if school.OrganizationId is not None and school.OrganizationId != org_id:
+        raise HTTPException(400, "That school belongs to another organization.")
+    return school
 
 
 @router.post("/departments")
@@ -119,19 +142,22 @@ def create_department(payload: DepartmentIn, db: Session = Depends(get_db), _use
     org = db.query(Organization).filter(Organization.OrganizationId == payload.OrganizationId).first()
     if not org:
         raise HTTPException(404, "Organization not found")
+    _school_for_department(db, payload.SchoolId, payload.OrganizationId)
     exists = (
         db.query(DepartmentMaster)
         .filter(DepartmentMaster.OrganizationId == payload.OrganizationId)
         .filter(DepartmentMaster.DepartmentName == name)
+        .filter(DepartmentMaster.SchoolId == payload.SchoolId if payload.SchoolId is not None else DepartmentMaster.SchoolId.is_(None))
         .first()
     )
     if exists:
-        raise HTTPException(400, "Department already exists in this organization")
-    row = DepartmentMaster(OrganizationId=payload.OrganizationId, DepartmentName=name, IsActive=_active(payload.IsActive))
+        raise HTTPException(400, "Department already exists here")
+    row = DepartmentMaster(OrganizationId=payload.OrganizationId, DepartmentName=name, IsActive=_active(payload.IsActive),
+                           SchoolId=payload.SchoolId)
     db.add(row)
     db.commit()
     db.refresh(row)
-    return {"DepartmentId": row.DepartmentId, "OrganizationId": row.OrganizationId, "DepartmentName": row.DepartmentName, "IsActive": row.IsActive}
+    return _dept_dto(row)
 
 
 @router.put("/departments/{dept_id}")
@@ -143,11 +169,14 @@ def update_department(dept_id: int, payload: DepartmentIn, db: Session = Depends
     row.OrganizationId = payload.OrganizationId or row.OrganizationId
     row.DepartmentName = payload.DepartmentName.strip() or row.DepartmentName
     row.IsActive = _active(payload.IsActive)
+    if "SchoolId" in payload.model_fields_set:
+        _school_for_department(db, payload.SchoolId, row.OrganizationId)
+        row.SchoolId = payload.SchoolId
     # Keep the legacy free-text employees.Department in sync on rename.
     if old_name != row.DepartmentName:
         db.query(Employee).filter(Employee.Department == old_name).update({"Department": row.DepartmentName})
     db.commit()
-    return {"DepartmentId": row.DepartmentId, "OrganizationId": row.OrganizationId, "DepartmentName": row.DepartmentName, "IsActive": row.IsActive}
+    return _dept_dto(row)
 
 
 # ---- Employee types ----
@@ -192,12 +221,21 @@ def update_employee_type(type_id: int, payload: EmployeeTypeIn, db: Session = De
 # ---- Schools ----
 
 def _school_dto(s: School) -> dict:
-    return {"SchoolId": s.SchoolId, "SchoolName": s.SchoolName, "IsActive": s.IsActive or "Y"}
+    return {"SchoolId": s.SchoolId, "SchoolName": s.SchoolName, "IsActive": s.IsActive or "Y",
+            "OrganizationId": s.OrganizationId}
+
+
+def _check_org(db: Session, org_id: Optional[int]) -> None:
+    if org_id is not None and not db.get(Organization, org_id):
+        raise HTTPException(404, "Organization not found")
 
 
 @router.get("/schools")
-def list_schools(include_inactive: bool = False, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def list_schools(organization_id: Optional[int] = Query(default=None), include_inactive: bool = False,
+                 db: Session = Depends(get_db), _user=Depends(get_current_user)):
     q = db.query(School)
+    if organization_id is not None:
+        q = q.filter(School.OrganizationId == organization_id)
     if not include_inactive:
         q = q.filter((School.IsActive.is_(None)) | (School.IsActive == "Y"))
     return [_school_dto(s) for s in q.order_by(School.SchoolName).all()]
@@ -210,7 +248,8 @@ def create_school(payload: SchoolIn, db: Session = Depends(get_db), _user=Depend
         raise HTTPException(400, "School name is required")
     if db.query(School).filter(func.lower(School.SchoolName) == name.lower()).first():
         raise HTTPException(400, "School already exists")
-    row = School(SchoolName=name, IsActive=_active(payload.IsActive))
+    _check_org(db, payload.OrganizationId)
+    row = School(SchoolName=name, IsActive=_active(payload.IsActive), OrganizationId=payload.OrganizationId)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -228,8 +267,47 @@ def update_school(school_id: int, payload: SchoolIn, db: Session = Depends(get_d
         raise HTTPException(400, "School already exists")
     row.SchoolName = name  # employees store the id, so nothing else needs renaming
     row.IsActive = _active(payload.IsActive)
+    if "OrganizationId" in payload.model_fields_set and payload.OrganizationId != row.OrganizationId:
+        _check_org(db, payload.OrganizationId)
+        row.OrganizationId = payload.OrganizationId
+        if payload.OrganizationId is not None:
+            # Its departments follow it only if they were in no other institution; the rest are unlinked.
+            db.query(DepartmentMaster).filter(DepartmentMaster.SchoolId == school_id,
+                                              DepartmentMaster.OrganizationId != payload.OrganizationId) \
+                .update({DepartmentMaster.SchoolId: None}, synchronize_session=False)
     db.commit()
     return _school_dto(row)
+
+
+@router.post("/link-from-employees")
+def link_from_employees(db: Session = Depends(get_db), _user=Depends(get_current_user)) -> dict:
+    """Fill the Organization > School > Department links that are still empty from what the employees carry:
+    a school goes to the institution most of its staff are in, a department to the school most of its staff
+    (in that institution) are in. Links already set are never changed."""
+    schools_linked = depts_linked = 0
+    for school in db.query(School).filter(School.OrganizationId.is_(None)).all():
+        top = (db.query(Employee.OrganizationId, func.count(Employee.EmployeeId))
+               .filter(Employee.SchoolId == school.SchoolId, Employee.OrganizationId.isnot(None))
+               .group_by(Employee.OrganizationId).order_by(func.count(Employee.EmployeeId).desc()).first())
+        if top:
+            school.OrganizationId = top[0]
+            schools_linked += 1
+    db.flush()
+    school_org = {s.SchoolId: s.OrganizationId for s in db.query(School)}
+    for dept in db.query(DepartmentMaster).filter(DepartmentMaster.SchoolId.is_(None)).all():
+        rows = (db.query(Employee.SchoolId, func.count(Employee.EmployeeId))
+                .filter(func.upper(func.ltrim(func.rtrim(Employee.Department))) == dept.DepartmentName.strip().upper(),
+                        Employee.OrganizationId == dept.OrganizationId, Employee.SchoolId.isnot(None))
+                .group_by(Employee.SchoolId).order_by(func.count(Employee.EmployeeId).desc()).all())
+        pick = next((sid for sid, _ in rows if school_org.get(sid) in (None, dept.OrganizationId)), None)
+        if pick is not None:
+            dept.SchoolId = pick
+            depts_linked += 1
+    db.commit()
+    left_schools = db.query(School).filter(School.OrganizationId.is_(None)).count()
+    left_depts = db.query(DepartmentMaster).filter(DepartmentMaster.SchoolId.is_(None)).count()
+    return {"schools_linked": schools_linked, "departments_linked": depts_linked,
+            "schools_unlinked": left_schools, "departments_unlinked": left_depts}
 
 
 # ---- Designations ----

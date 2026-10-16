@@ -42,8 +42,10 @@ def _parse(row: RoleConfig) -> Optional[dict]:
         return None
     perms = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
     org = data.get("organization_id")
+    devices = data.get("device_ids")
+    device_ids = sorted({int(d) for d in devices if isinstance(d, int) or str(d).isdigit()}) if isinstance(devices, list) else []
     return {"name": row.RoleName, "organization_id": int(org) if isinstance(org, int) or str(org).isdigit() else None,
-            "permissions": {k: bool(v) for k, v in perms.items()}}
+            "device_ids": device_ids, "permissions": {k: bool(v) for k, v in perms.items()}}
 
 
 def list_campus_roles(db: Session) -> list[dict]:
@@ -64,7 +66,7 @@ def campus_role(db: Session, role_name: Optional[str]) -> Optional[dict]:
 
 
 def save_campus_role(db: Session, name: str, organization_id: Optional[int], permissions: dict[str, bool],
-                     original_name: Optional[str] = None) -> dict:
+                     original_name: Optional[str] = None, device_ids: Optional[list[int]] = None) -> dict:
     name = (name or "").strip()
     if not name or len(name) > 50:
         raise HTTPException(400, "Give the role a name (up to 50 characters).")
@@ -72,10 +74,15 @@ def save_campus_role(db: Session, name: str, organization_id: Optional[int], per
         raise HTTPException(400, f'"{name}" is a built-in role name; choose another, e.g. "Campus 2".')
     if organization_id is not None and not db.get(Organization, organization_id):
         raise HTTPException(400, "That institution does not exist.")   # None = all institutions
+    device_ids = sorted({int(d) for d in (device_ids or [])})
+    if device_ids:
+        known = {d for (d,) in db.query(Device.DeviceId).filter(Device.DeviceId.in_(device_ids))}
+        if len(known) != len(device_ids):
+            raise HTTPException(400, "One of the linked devices no longer exists; reload the page and pick again.")
     existing = db.query(RoleConfig).filter(RoleConfig.RoleName == name).first()
     if existing and (original_name or "").strip() != name:   # a new role, or a rename onto a taken name
         raise HTTPException(400, f'A role called "{name}" already exists.')
-    payload = json.dumps({"kind": CAMPUS_KIND, "organization_id": organization_id,
+    payload = json.dumps({"kind": CAMPUS_KIND, "organization_id": organization_id, "device_ids": device_ids,
                           "permissions": {k: bool(v) for k, v in (permissions or {}).items()}})
     old = (original_name or "").strip()
     if old and old != name:
@@ -116,10 +123,36 @@ def employees_query(db: Session, user: Optional[User], q: Optional[Query] = None
     return q.filter(Employee.OrganizationId == org) if org is not None else q
 
 
+def allowed_device_ids(db: Session, user: Optional[User]) -> Optional[set[int]]:
+    """Readers this login may see and manage, or None for all of them.
+    The role's linked devices when any are picked on the User Roles page; otherwise its institution's readers."""
+    role = campus_role(db, getattr(user, "RoleName", None)) if user is not None else None
+    if role is None:
+        return None
+    if role["device_ids"]:
+        return set(role["device_ids"])
+    if role["organization_id"] is not None:
+        return {d for (d,) in db.query(Device.DeviceId).filter(Device.OrganizationId == role["organization_id"])}
+    return None
+
+
+def link_new_device(db: Session, user: Optional[User], device_id: int) -> None:
+    """A reader added by a login whose role has linked devices joins that list, so it does not vanish from view."""
+    role = campus_role(db, getattr(user, "RoleName", None)) if user is not None else None
+    if role and role["device_ids"] and device_id not in role["device_ids"]:
+        save_campus_role(db, role["name"], role["organization_id"], role["permissions"], role["name"],
+                         role["device_ids"] + [device_id])
+
+
+def is_limited(db: Session, user: Optional[User]) -> bool:
+    """True when the login sees only some institutions' staff or only some readers."""
+    return user_org_id(db, user) is not None or allowed_device_ids(db, user) is not None
+
+
 def devices_query(db: Session, user: Optional[User], q: Optional[Query] = None) -> Query:
     q = q if q is not None else db.query(Device)
-    org = user_org_id(db, user)
-    return q.filter(Device.OrganizationId == org) if org is not None else q
+    ids = allowed_device_ids(db, user)
+    return q.filter(Device.DeviceId.in_(ids or [-1])) if ids is not None else q
 
 
 def allowed_employee_codes(db: Session, user: Optional[User]) -> Optional[set[str]]:
@@ -153,15 +186,17 @@ def check_employee_id(db: Session, user: Optional[User], employee_id: int) -> No
 
 
 def check_device(db: Session, user: Optional[User], device: Optional[Device]) -> None:
-    org = user_org_id(db, user)
-    if org is not None and (device is None or device.OrganizationId != org):
+    ids = allowed_device_ids(db, user)
+    if ids is not None and (device is None or device.DeviceId not in ids):
         raise HTTPException(404, "Device not found")
 
 
 def check_device_id(db: Session, user: Optional[User], device_id: Optional[int]) -> None:
-    if user_org_id(db, user) is None or device_id is None:
+    if device_id is None:
         return
-    check_device(db, user, db.get(Device, device_id))
+    ids = allowed_device_ids(db, user)
+    if ids is not None and int(device_id) not in ids:
+        raise HTTPException(404, "Device not found")
 
 
 def check_codes(db: Session, user: Optional[User], codes) -> None:
@@ -176,7 +211,7 @@ def check_codes(db: Session, user: Optional[User], codes) -> None:
 
 def check_transfer(db: Session, user: Optional[User], payload) -> None:
     """A transfer request (source reader, target readers, people) must stay inside the login's institution."""
-    if user_org_id(db, user) is None:
+    if not is_limited(db, user):
         return
     check_device_id(db, user, getattr(payload, "source_device_id", None))
     for did in getattr(payload, "target_device_ids", None) or []:
@@ -188,8 +223,8 @@ def check_transfer(db: Session, user: Optional[User], payload) -> None:
 
 def job_visible(db: Session, user: Optional[User], job) -> bool:
     """A transfer job is visible to a campus login when its source and every target reader are its own."""
-    org = user_org_id(db, user)
-    if org is None:
+    allowed = allowed_device_ids(db, user)
+    if allowed is None:
         return True
     try:
         targets = [int(x) for x in json.loads(job.TargetDeviceIds or "[]")]
@@ -198,8 +233,7 @@ def job_visible(db: Session, user: Optional[User], job) -> bool:
     ids = targets + ([job.SourceDeviceId] if job.SourceDeviceId else [])
     if not ids:
         return False
-    mine = {d for (d,) in db.query(Device.DeviceId).filter(Device.DeviceId.in_(ids), Device.OrganizationId == org)}
-    return all(i in mine for i in ids)
+    return all(i in allowed for i in ids)
 
 
 def check_job(db: Session, user: Optional[User], job) -> None:
@@ -231,10 +265,19 @@ def shared_read_only(request: Request, db: Session = Depends(get_db), user: User
         raise HTTPException(403, "These settings are shared by every institution; only an Admin can change them.")
 
 
+def shared_unless(perm: str):
+    """Like `shared_read_only`, but a custom role with the `perm` switch on (User Roles) may also change these
+    settings - e.g. Leave Section with "Leave Types" manages leave types, which every institution shares."""
+    def guard(request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> None:
+        if request.method not in ("GET", "HEAD", "OPTIONS") and is_custom_role(db, user) and not role_allows(db, user, perm):
+            raise HTTPException(403, "These settings are shared by every institution; only an Admin can change them.")
+    return guard
+
+
 def campus_guard(request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> None:
     """Router-level guard: for a campus login, any device / employee named in the URL (path or query) must belong
     to its institution. List endpoints and request bodies are filtered/checked in the endpoints themselves."""
-    if user_org_id(db, user) is None:
+    if not is_limited(db, user):
         return
     params = {**request.query_params, **request.path_params}
     for key in ("device_id", "source_device_id"):

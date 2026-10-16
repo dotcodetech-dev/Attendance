@@ -650,6 +650,11 @@ async def cdata(
             # (table=BIODATA is how an AI-face reader sends its faces). The lines look exactly like OPERLOG
             # ones, so they are imported the same way - these were being acknowledged and dropped.
             inserted += _store_operlog_records(db, device, parse_operlog_lines(payload))
+        elif table_upper in {"BIOPHOTO", "USERPIC"} and any(
+                r["fields"].get("CONTENT") for r in parse_operlog_lines(payload, default_kind=table_upper)):
+            # A reader's photo table (PIN / FileName / Content): the person's enrolment photo or display picture.
+            # Before, these went through the attendance-photo parser, which knows no Content= field: dropped.
+            inserted += _store_operlog_records(db, device, parse_operlog_lines(payload, default_kind=table_upper))
         elif table_upper in {"ATTPHOTO", "BIOPHOTO", "PHOTO"}:
             for item in parse_photo_lines(payload):
                 employee_code = item.get("EmployeeCode")
@@ -697,8 +702,8 @@ async def cdata(
         # advances TransactionStamp, OPERLOG advances OpStamp.
         if table_upper == "OPERLOG":
             device.OpStamp = Stamp
-        elif table_upper in _TEMPLATE_TABLES:
-            pass   # template tables carry no punch / operation stamp
+        elif table_upper in _TEMPLATE_TABLES or table_upper in {"BIOPHOTO", "USERPIC"}:
+            pass   # template and photo tables carry no punch / operation stamp
         else:
             device.TransactionStamp = Stamp
         db.commit()
@@ -901,10 +906,11 @@ async def querydata(request: Request, SN: str = Query(...)):
         device = _get_or_register_device(db, SN)
         if not device:
             return PlainTextResponse("OK")
-        stored = _store_operlog_records(db, device, parse_operlog_lines(payload))
+        table = (request.query_params.get("tablename") or request.query_params.get("table") or "").strip().upper() or None
+        stored = _store_operlog_records(db, device, parse_operlog_lines(payload, default_kind=table))
         device.LastPing = datetime.utcnow()
         db.commit()
-        _log_comm(SN, "QUERYDATA", f"{stored} record(s) stored")
+        _log_comm(SN, "QUERYDATA", f"{(table or '').lower() or 'table'}: {stored} record(s) stored")
         return PlainTextResponse("OK")
     finally:
         db.close()

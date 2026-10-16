@@ -540,6 +540,10 @@ COMPAT_SCHEMA_SQL = """
     IF OBJECT_ID('dbo.employees', 'U') IS NOT NULL
        AND COL_LENGTH('dbo.employees', 'SchoolId') IS NULL
         ALTER TABLE dbo.employees ADD SchoolId INT NULL;
+    -- Hierarchy: Organization > School > Department (both NULL = not linked yet; older data).
+    IF COL_LENGTH('dbo.schools', 'OrganizationId') IS NULL ALTER TABLE dbo.schools ADD OrganizationId INT NULL;
+    IF OBJECT_ID('dbo.departments', 'U') IS NOT NULL AND COL_LENGTH('dbo.departments', 'SchoolId') IS NULL
+        ALTER TABLE dbo.departments ADD SchoolId INT NULL;
     IF OBJECT_ID('dbo.employees', 'U') IS NOT NULL
        AND COL_LENGTH('dbo.employees', 'ShortNo') IS NULL
         ALTER TABLE dbo.employees ADD ShortNo NVARCHAR(20) NULL;

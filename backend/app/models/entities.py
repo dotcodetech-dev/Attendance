@@ -241,6 +241,7 @@ class DepartmentMaster(Base):
     OrganizationId: Mapped[int] = mapped_column(Integer, nullable=False)
     DepartmentName: Mapped[str] = mapped_column(String(150), nullable=False)
     IsActive: Mapped[Optional[str]] = mapped_column(String(1), nullable=True, default="Y")
+    SchoolId: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)   # Organization > School > Department
 
 
 class EmployeeType(Base):
@@ -252,14 +253,15 @@ class EmployeeType(Base):
 
 
 class School(Base):
-    """A school / faculty inside the institution (e.g. School of Computer Science). Standalone master:
-    employees carry a SchoolId, independent of Department."""
+    """A school / faculty inside an institution (e.g. School of Computer Science): Organization > School > Department.
+    Employees carry a SchoolId. OrganizationId NULL = not linked to an institution yet (older data)."""
 
     __tablename__ = "schools"
 
     SchoolId: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     SchoolName: Mapped[str] = mapped_column(String(150), nullable=False)
     IsActive: Mapped[Optional[str]] = mapped_column(String(1), nullable=True, default="Y")
+    OrganizationId: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
 class Designation(Base):

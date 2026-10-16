@@ -47,6 +47,7 @@ class CampusRoleIn(BaseModel):
     organization_id: Optional[int] = None   # None = all institutions (e.g. Leave Section)
     permissions: dict[str, bool] = Field(default_factory=dict)
     original_name: Optional[str] = None   # set when renaming an existing campus role
+    device_ids: list[int] = Field(default_factory=list)   # linked readers; empty = the institution's readers
 
 
 @router.get("/campus-roles")
@@ -58,7 +59,8 @@ def get_campus_roles(db: Session = Depends(get_db), _user=Depends(get_current_us
 @router.put("/campus-roles")
 def put_campus_role(payload: CampusRoleIn, db: Session = Depends(get_db), _user=Depends(get_current_user)) -> dict:
     """Create or update a campus role (a rename also moves the logins that use it)."""
-    return save_campus_role(db, payload.name, payload.organization_id, payload.permissions, payload.original_name)
+    return save_campus_role(db, payload.name, payload.organization_id, payload.permissions, payload.original_name,
+                            payload.device_ids)
 
 
 @router.delete("/campus-roles/{name}")

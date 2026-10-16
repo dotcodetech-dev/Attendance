@@ -2744,6 +2744,25 @@ label { font-size: 13.5px; color: var(--text); }
 .masters-btn:hover { border-color: var(--accent-strong); color: var(--accent-strong); background: var(--accent-soft); }
 .masters-btn-primary { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
 .masters-btn-primary:hover { color: #fff; opacity: .9; background: var(--accent-strong); }
+.masters-tree { margin-bottom: var(--space-4); }
+.masters-tree-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: var(--space-3); }
+.masters-tree-head h3 { margin: 0; font-size: 16px; font-weight: 800; }
+.masters-tree-head h3 span { color: var(--text-muted); font-weight: 600; padding: 0 2px; }
+.masters-tree-head p { margin: 4px 0 0; font-size: 13px; color: var(--text-muted); }
+.masters-tree-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); align-items: start; }
+@media (max-width: 1100px) { .masters-tree-cols { grid-template-columns: 1fr; } }
+.masters-pick {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px; text-align: left; cursor: pointer;
+  background: none; border: 0; padding: 0; color: inherit; font: inherit; font-size: 14px; font-weight: 600;
+}
+.masters-pick span { color: var(--text-muted); font-size: 18px; line-height: 1; }
+.masters-item.is-picked, .masters-item.is-picked:nth-child(even) { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent-strong); }
+.masters-item.is-picked .masters-pick, .masters-item.is-picked .masters-pick span { color: var(--accent-strong); }
+.masters-free { margin-top: var(--space-3); border: 1px dashed var(--border); border-radius: 12px; padding: 10px 12px; background: var(--surface-muted); }
+.masters-free-title { display: block; font-size: 11.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+.masters-free ul { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.masters-free li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 0; font-size: 13.5px; }
+.masters-free li + li { border-top: 1px solid #edf2f7; }
 .masters-empty {
   text-align: center; padding: 22px 16px; border: 1px dashed var(--border); border-radius: 12px;
   color: var(--text-muted); background: var(--surface-muted); font-size: 13px;
@@ -3441,6 +3460,24 @@ label > span > .req, .field-label > .req { margin-left: 3px; }
 .roles-campus-new.is-on { background: var(--primary-soft, #efeafe); }
 .roles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 20px; align-items: start; }
 .roles-card { margin-bottom: 0; }
+.roles-devices { margin: 16px 0 0; }
+.idle-overlay { z-index: 2000; }
+.idle-dialog { max-width: 420px; padding: 24px; background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); }
+.idle-dialog h3 { margin: 0 0 8px; font-size: 18px; font-weight: 800; }
+.idle-dialog p { margin: 0 0 18px; color: var(--text-muted); font-size: 14.5px; line-height: 1.5; }
+.idle-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.ul-table-wrap { overflow-x: auto; }
+.ul-sub { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; }
+.ul-show { display: inline-flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13.5px; color: var(--text-muted); cursor: pointer; }
+.roles-devices-actions { display: flex; gap: 14px; flex-wrap: wrap; }
+.roles-devices-search { width: 100%; margin: 4px 0 10px; }
+.roles-devices-empty { margin: 6px 0; color: var(--text-muted); font-size: 13.5px; }
+.roles-devices-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; max-height: 360px; overflow-y: auto; }
+.roles-devices-list label { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; align-items: center; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; background: var(--surface); }
+.roles-devices-list label.is-on { border-color: var(--primary); background: var(--primary-soft); }
+.roles-devices-list input { grid-row: span 3; width: 18px; height: 18px; margin: 0; }
+.roles-devices-name { font-weight: 700; font-size: 14px; }
+.roles-devices-meta, .roles-devices-org { font-size: 12.5px; color: var(--text-muted); }
 .roles-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .roles-card-head h3 { margin: 0; font-size: 16px; font-weight: 800; }
 .roles-card-head p { margin: 2px 0 0; font-size: 12.5px; color: var(--text-muted); }

@@ -71,7 +71,7 @@ def _parse_datetime(value: str) -> Optional[datetime]:
     return None
 
 
-def parse_operlog_lines(payload: str) -> list[dict]:
+def parse_operlog_lines(payload: str, default_kind: Optional[str] = None) -> list[dict]:
     """
     Parse a POST /iclock/cdata?table=OPERLOG body. Devices push enrolled data
     as lines whose first token names the record type, followed by tab-separated
@@ -82,14 +82,22 @@ def parse_operlog_lines(payload: str) -> list[dict]:
         USERPIC PIN=1\tFileName=1.jpg\tSize=...\tContent=<base64>
         BIOPHOTO PIN=1\tFileName=1.jpg\tType=2\tSize=...\tContent=<base64>
     OPLOG (operation record) lines are ignored.
+    default_kind: the table the upload is for (e.g. BIOPHOTO), used when a row starts straight with its fields
+    ("pin=1\tfilename=1.jpg\tcontent=...") instead of the table name.
     Returns [{kind, pin, fields}] with field keys upper-cased.
     """
     records: list[dict] = []
     for raw_line in payload.splitlines():
         line = raw_line.strip()
-        if not line or " " not in line:
+        if not line:
             continue
-        kind, remainder = line.split(" ", 1)
+        head = line.split("\t", 1)[0]
+        if default_kind and "=" in head.split(" ", 1)[0]:
+            kind, remainder = default_kind, line
+        elif " " in line:
+            kind, remainder = line.split(" ", 1)
+        else:
+            continue
         kind = kind.strip().upper()
         # Newer firmwares name the tables USERINFO / FINGERTMP / BIODATA (Type 1 = finger, 9 = face).
         kind = {"USERINFO": "USER", "FINGERTMP": "FP"}.get(kind, kind)

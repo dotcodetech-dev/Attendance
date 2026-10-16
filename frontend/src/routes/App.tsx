@@ -8,6 +8,7 @@ import { DashboardPage } from "../pages/DashboardPage";
 import { DevicesPage } from "../pages/DevicesPage";
 import { EssLeavesPage } from "../pages/EssLeavesPage";
 import { EssManualEntryPage } from "../pages/EssManualEntryPage";
+import { UsersLoginsPage } from "../pages/UsersLoginsPage";
 import { LeaveApprovalsPage } from "../pages/LeaveApprovalsPage";
 import { EssMyAttendancePage } from "../pages/EssMyAttendancePage";
 import { EmployeesPage } from "../pages/EmployeesPage";
@@ -102,6 +103,7 @@ export function App() {
           <Route path="config/leaves" element={<LeavesConfigPage />} />
           <Route path="config/categories" element={<CategoriesConfigPage />} />
           <Route path="config/roles" element={<UserRolesConfigPage />} />
+          <Route path="config/logins" element={<UsersLoginsPage />} />
           <Route path="config/organization" element={<OrganizationConfigPage />} />
           <Route path="config/masters" element={<MastersConfigPage />} />
           {/* Mess */}

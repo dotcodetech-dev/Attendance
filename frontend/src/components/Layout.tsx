@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
 
+import { IdleLogout } from "./IdleLogout";
 import { NotificationBell } from "./NotificationBell";
 import { Icons } from "./SidebarIcons";
 import { api, CONNECTION_ISSUE_EVENT, CONNECTION_OK_EVENT, SESSION_EXPIRED_EVENT } from "../api/client";
@@ -79,6 +80,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/config/leaves", icon: Icons.document, label: "Leave Types" },
       { to: "/config/categories", icon: Icons.tag, label: "Categories" },
       { to: "/config/roles", icon: Icons.roles, label: "User Roles" },
+      { to: "/config/logins", icon: Icons.user, label: "Users & Logins" },
       { to: "/config/organization", icon: Icons.document, label: "Organization" },
       { to: "/config/masters", icon: Icons.tag, label: "Org & Masters" },
       { to: "/config/mess", icon: Icons.tag, label: "Module Configuration" },
@@ -133,6 +135,8 @@ function permOf(path: string): string {
   if (path === "/ess/manual-entry") return "ess_manual_entry";
   if (path.startsWith("/students")) return "students";
   if (path.startsWith("/mess")) return "mess";
+  if (path === "/config/logins") return "admin_only";
+  if (path === "/config/leaves") return "config_leaves";
   return "config";
 }
 
@@ -315,6 +319,12 @@ function LayoutInner() {
     clearToken();
     navigate("/login");
   };
+  // 5 minutes on standby: sign out and say why on the Login page.
+  const idleLogout = useCallback(() => {
+    sessionStorage.setItem("sessionExpiredMessage", "You were signed out after 5 minutes with no activity. Sign in again to continue.");
+    clearToken();
+    navigate("/login");
+  }, [navigate]);
 
   // Any API call that comes back 401 means the session is no longer valid (expired, or the
   // server restarted with a different signing key). Previously every page just swallowed that
@@ -437,6 +447,7 @@ function LayoutInner() {
             <ProfileMenu onLogout={logout} />
           </div>
         </header>
+        <IdleLogout onTimeout={idleLogout} />
         <main className="content">
           <div className="content-body">
             {connectionLost && (

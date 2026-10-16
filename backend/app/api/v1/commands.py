@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
-from app.services.campus_scope import check_device_id, check_transfer, user_org_id
+from app.services.campus_scope import allowed_device_ids, check_device_id, check_transfer
 from app.database import get_db
 from app.models.entities import Device, DeviceCommand, DeviceEmployee, Employee, EmployeeBio
 from app.schemas.command import DeviceCommandCreate, DeviceCommandOut, TransferRequest
@@ -27,9 +27,9 @@ COMMAND_MAP = {
 @router.get("", response_model=list[DeviceCommandOut])
 def list_commands(db: Session = Depends(get_db), user=Depends(get_current_user)):
     q = db.query(DeviceCommand)
-    org = user_org_id(db, user)
-    if org is not None:   # campus login: commands of its institution's readers only
-        q = q.filter(DeviceCommand.DeviceId.in_(db.query(Device.DeviceId).filter(Device.OrganizationId == org)))
+    ids = allowed_device_ids(db, user)
+    if ids is not None:   # campus login: commands of its own readers only
+        q = q.filter(DeviceCommand.DeviceId.in_(ids or [-1]))
     return q.order_by(DeviceCommand.DeviceCommandId.desc()).all()
 
 

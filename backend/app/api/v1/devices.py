@@ -34,10 +34,11 @@ from app.schemas.device import (
 from app.services.attendance_ingest import fetch_and_store
 from app.services.employee_delete import blocked_pins, not_a_staff_pin, student_codes
 from app.services.bio_store import template_counts, upsert_template
-from app.services.campus_scope import devices_query, user_org_id
+from app.services.campus_scope import allowed_device_ids, devices_query, link_new_device, user_org_id
 from app.services.push_channel import (
     PUSH_ONLINE_SECONDS, channel_for, is_ai_reader, is_push_online, push_delete_user, push_reader_status,
-    push_status_message, push_users, queue_commands, queue_user_refresh, queued_note, reader_channel, sdk_reachable,
+    last_polled_text, push_status_message, push_users, queue_commands, queue_photo_upload, queue_user_refresh, queued_note,
+    reader_channel, sdk_reachable,
     send_names_to_reader,
 )
 from app.services.device_sdk import (
@@ -66,7 +67,7 @@ def device_comm_log(
     admin watch whether a device is actually pushing attendance in real time."""
     from app.iclock.routes import get_recent_comm
     rows = get_recent_comm(sn=serial, limit=max(1, min(limit, 300)))
-    if user_org_id(db, user) is not None:   # campus login: only its institution's readers
+    if allowed_device_ids(db, user) is not None:   # campus login: only its own readers
         mine = {sn for (sn,) in devices_query(db, user, db.query(Device.SerialNumber))}
         rows = [r for r in rows if (r.get("sn") or r.get("SN") or r.get("serial")) in mine]
     return rows
@@ -211,6 +212,7 @@ def create_device(payload: DeviceCreate, db: Session = Depends(get_db), user=Dep
     db.add(row)
     db.commit()
     db.refresh(row)
+    link_new_device(db, user, row.DeviceId)
     return _attach_status(row)
 
 
@@ -908,10 +910,15 @@ def pull_machine_user_photo(
     if not row:
         raise HTTPException(status_code=404, detail="Device not found")
     if is_ai_reader(row):
-        # The SDK cannot log in to an AI-face reader; its photos reach the server when it uploads its users.
-        raise HTTPException(status_code=400, detail=(
-            "This AI-face reader cannot be read directly (SDK). Its photos come to the server with its user upload: "
-            "press Refresh from device, wait for the list to reload, then View photo."))
+        # The SDK cannot log in to an AI-face reader: it uploads its photos itself when asked (push protocol).
+        code = employee_code.strip()
+        have = db.query(EmployeePhoto.EmployeePhotoId).filter(EmployeePhoto.EmployeeCode == code).first() is not None
+        queued = 0 if have else queue_photo_upload(db, row)
+        return DeviceMachineUserPhotoPullResponse(
+            DeviceId=device_id, EmployeeCode=code, connected=True, photo_found=have, stored=have, source="push",
+            message=("Photo is on the server: press View photo." if have else
+                     ("Asked the reader to upload its photos. " if queued else "The reader was already asked to upload its photos. ")
+                     + f"It sends them when it next polls ({last_polled_text(row)}); press View photo in a minute."))
     if not row.DeviceIPAddress:
         raise HTTPException(status_code=400, detail="Device IP Address is missing")
 

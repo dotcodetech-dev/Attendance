@@ -29,11 +29,19 @@ SDK_PROBE_SECONDS = 2.0        # fast TCP probe before we commit to a 30 s SDK a
 # handshake) keep visible-light faces and fingerprints in the BIODATA table and only answer the
 # tablename= form (replies arrive on /iclock/querydata). Both forms are sent; a reader ignores the
 # ones it does not know.
+# The photo tables come last: AI-face readers keep each person's enrolment photo (biophoto) and display picture
+# (userpic) apart from the face template, and only send them when asked - without these, most people on an AI
+# reader had a face but no photo on the server.
+PHOTO_QUERY_COMMANDS = [
+    "DATA QUERY tablename=biophoto,fielddesc=*,filter=*",
+    "DATA QUERY tablename=userpic,fielddesc=*,filter=*",
+]
 USER_REFRESH_COMMANDS = [
     "CHECK",
     "DATA QUERY USERINFO", "DATA QUERY FINGERTMP", "DATA QUERY FACE",
     "DATA QUERY tablename=user,fielddesc=*,filter=*",
     "DATA QUERY tablename=biodata,fielddesc=*,filter=*",
+    *PHOTO_QUERY_COMMANDS,
 ]
 
 
@@ -132,6 +140,15 @@ def queue_commands(db: Session, device: Device, commands: list[str], title: str)
                              Status="Pending", Type="push", CreationDate=now))
     db.commit()
     return len(commands)
+
+
+def queue_photo_upload(db: Session, device: Device) -> int:
+    """Ask a push reader to upload its photo tables (once: not again while an earlier request is still waiting)."""
+    pending = {c for (c,) in db.query(DeviceCommand.DeviceCommand)
+               .filter(DeviceCommand.DeviceId == device.DeviceId, DeviceCommand.Status == "Pending",
+                       DeviceCommand.DeviceCommand.in_(PHOTO_QUERY_COMMANDS))}
+    todo = [c for c in PHOTO_QUERY_COMMANDS if c not in pending]
+    return queue_commands(db, device, todo, "Upload photos from device") if todo else 0
 
 
 def queue_user_refresh(db: Session, device: Device) -> int:

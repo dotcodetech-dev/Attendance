@@ -11,7 +11,7 @@ from sqlalchemy.exc import OperationalError, DBAPIError
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
-from app.services.campus_scope import user_org_id
+from app.services.campus_scope import allowed_device_ids, user_org_id
 from app.database import get_db
 from app.models.entities import Device, DeviceLog, Employee
 
@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 @router.get("/summary")
 def summary(db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        return _build_summary(db, user_org_id(db, user))
+        return _build_summary(db, user_org_id(db, user), allowed_device_ids(db, user))
     except (OperationalError, DBAPIError, OSError) as exc:
         log.error("Dashboard DB error: %s", exc)
         return JSONResponse(
@@ -31,10 +31,11 @@ def summary(db: Session = Depends(get_db), user=Depends(get_current_user)):
         )
 
 
-def _build_summary(db: Session, org: Optional[int] = None):
-    """org: a campus login's institution - every count covers only its readers, staff and their punches."""
+def _build_summary(db: Session, org: Optional[int] = None, device_ids: Optional[set[int]] = None):
+    """org: a campus login's institution - every count covers only its staff and their punches.
+    device_ids: the readers that login may see (its linked devices, or its institution's)."""
     def dev(q):
-        return q.filter(Device.OrganizationId == org) if org is not None else q
+        return q.filter(Device.DeviceId.in_(device_ids or [-1])) if device_ids is not None else q
 
     def emp(q):
         return q.filter(Employee.OrganizationId == org) if org is not None else q

@@ -29,6 +29,7 @@ export function MeProvider({ children }: { children: React.ReactNode }) {
 
   // Admin, Manager, Employee: menus as today. A campus role: only the menus its switches allow.
   const can = (perm?: string) => {
+    if (perm === "admin_only") return !me || (me.role || "").toLowerCase() === "admin" || (me.login || "").toLowerCase() === "admin";
     if (!perm || !me?.campus) return true;
     return !!me.campus.permissions[perm];
   };

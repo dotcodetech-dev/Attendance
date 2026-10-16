@@ -178,14 +178,26 @@ export function EmployeesPage() {
       (!schoolFilter || String(r.SchoolId) === schoolFilter) &&
       (!deptFilter || normDept(r.Department) === normDept(deptFilter))
   );
-  // Department dropdown: the master list (of the chosen institution) plus any name employees carry that is not in it.
+  // Organization > School > Department: each filter offers only what fits the one before it. A campus login is
+  // always in its own institution. Options come from the masters' links plus what the employees themselves carry,
+  // so older data that is not linked yet still filters correctly.
+  const effOrg = orgFilter || (campus ? String(campus.id) : "");
+  const inOrg = (orgId: unknown) => !effOrg || String(orgId) === effOrg;
+  const schoolOptions = (() => {
+    if (!effOrg) return schools;
+    const ids = new Set<number>();
+    schools.forEach((x) => inOrg(x.OrganizationId) && ids.add(x.SchoolId));
+    rows.forEach((r: any) => inOrg(r.OrganizationId) && r.SchoolId && ids.add(r.SchoolId));
+    return schools.filter((x) => ids.has(x.SchoolId));
+  })();
+  // Department dropdown: the master list (of the chosen institution / school) plus any name those employees carry.
   const deptOptions = (() => {
     const seen = new Map<string, string>();
     departmentsList
-      .filter((d) => !orgFilter || String(d.OrganizationId) === orgFilter)
+      .filter((d) => inOrg(d.OrganizationId) && (!schoolFilter || String(d.SchoolId) === schoolFilter))
       .forEach((d) => d.DepartmentName && seen.set(normDept(d.DepartmentName), d.DepartmentName));
     rows
-      .filter((r: any) => !orgFilter || String(r.OrganizationId) === orgFilter)
+      .filter((r: any) => inOrg(r.OrganizationId) && (!schoolFilter || String(r.SchoolId) === schoolFilter))
       .forEach((r: any) => r.Department && !seen.has(normDept(r.Department)) && seen.set(normDept(r.Department), String(r.Department).trim()));
     return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
   })();
@@ -522,6 +534,19 @@ export function EmployeesPage() {
     const uniq = Array.from(new Set(names.filter(Boolean)));
     if (current && !uniq.includes(current)) uniq.unshift(current);
     return [{ value: "", label: noneLabel }, ...uniq.map((n) => ({ value: n, label: n }))];
+  };
+  // Employee form, Organization > School > Department: the organization's schools (all schools while none is linked
+  // to it yet), then the school's departments (the organization's while the school has none linked).
+  const formSchools = (orgId: string, current = "") => {
+    const linked = schools.filter((x) => orgId && String(x.OrganizationId) === orgId);
+    const list = linked.length ? linked : schools.filter((x) => x.OrganizationId == null || !orgId);
+    return current && !list.some((x) => String(x.SchoolId) === current)
+      ? [...schools.filter((x) => String(x.SchoolId) === current), ...list] : list;
+  };
+  const formDepts = (orgId: string, schoolId: string) => {
+    const ofOrg = departmentsList.filter((d) => !orgId || d.OrganizationId === Number(orgId));
+    const ofSchool = schoolId ? ofOrg.filter((d) => String(d.SchoolId) === schoolId) : [];
+    return (ofSchool.length ? ofSchool : ofOrg).map((d) => d.DepartmentName);
   };
   const roleOptions = (current: string) => {
     // A campus login hands out only its own campus role (or Employee); an Admin can give any role.
@@ -967,11 +992,15 @@ export function EmployeesPage() {
                     onChange={(e) => efSet("ShortNo", e.target.value)} />
                   <span className="field-hint">The office's own order: the employee list and reports are sorted by it (1, 2, 10 …). Optional; it is not the Face ID and is not sent to devices.</span>
                 </div>
-                {SelectField("Organization *", "OrganizationId", organizations.map((o) => ({ value: String(o.OrganizationId), label: o.OrgName })), (v) => setEditForm({ ...editForm, OrganizationId: v, Department: "" }))}
-                {SelectField("School", "SchoolId", [{ value: "", label: "— None —" }, ...schools.map((x) => ({ value: String(x.SchoolId), label: x.SchoolName }))])}
-                {SelectField("Department", "Department", listOptions(
-                  departmentsList.filter((d) => !editForm.OrganizationId || d.OrganizationId === Number(editForm.OrganizationId)).map((d) => d.DepartmentName),
-                  editForm.Department))}
+                {SelectField("Organization *", "OrganizationId", organizations.map((o) => ({ value: String(o.OrganizationId), label: o.OrgName })), (v) => setEditForm({
+                  ...editForm, OrganizationId: v, Department: "",
+                  SchoolId: formSchools(v).some((x) => String(x.SchoolId) === editForm.SchoolId) ? editForm.SchoolId : "",
+                }))}
+                {SelectField("School", "SchoolId", [{ value: "", label: "— None —" },
+                  ...formSchools(editForm.OrganizationId, editForm.SchoolId).map((x) => ({ value: String(x.SchoolId), label: x.SchoolName }))],
+                  (v) => setEditForm({ ...editForm, SchoolId: v,
+                    Department: formDepts(editForm.OrganizationId, v).some((n) => normDept(n) === normDept(editForm.Department)) ? editForm.Department : "" }))}
+                {SelectField("Department", "Department", listOptions(formDepts(editForm.OrganizationId, editForm.SchoolId), editForm.Department))}
                 {SelectField("Designation", "Designation", listOptions(designationNames, editForm.Designation))}
                 {SelectField("Employee type", "EmployeeTypeId", [{ value: "", label: "— None —" }, ...employeeTypes.map((t) => ({ value: String(t.EmployeeTypeId), label: t.TypeName }))])}
                 {SelectField("Role", "Role", roleOptions(editForm.Role))}
@@ -1503,13 +1532,13 @@ export function EmployeesPage() {
             <span className="search-icon"><SearchIcon /></span>
             <input type="search" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search by name, code, Face ID, department..." aria-label="Search employees" />
           </div>
-          <select className="input" value={orgFilter} onChange={(e) => { setOrgFilter(e.target.value); setPage(1); }} aria-label="Filter by institution" style={{ maxWidth: 240 }}>
+          <select className="input" value={orgFilter} onChange={(e) => { setOrgFilter(e.target.value); setSchoolFilter(""); setDeptFilter(""); setPage(1); }} aria-label="Filter by institution" style={{ maxWidth: 240 }}>
             <option value="">{campus ? campus.name : "All institutions"}</option>
             {!campus && organizations.map((o) => <option key={o.OrganizationId} value={String(o.OrganizationId)}>{o.OrgName}</option>)}
           </select>
-          <select className="input" value={schoolFilter} onChange={(e) => { setSchoolFilter(e.target.value); setPage(1); }} aria-label="Filter by school" style={{ maxWidth: 240 }}>
+          <select className="input" value={schoolFilter} onChange={(e) => { setSchoolFilter(e.target.value); setDeptFilter(""); setPage(1); }} aria-label="Filter by school" style={{ maxWidth: 240 }}>
             <option value="">All schools</option>
-            {schools.map((x) => <option key={x.SchoolId} value={String(x.SchoolId)}>{x.SchoolName}</option>)}
+            {schoolOptions.map((x) => <option key={x.SchoolId} value={String(x.SchoolId)}>{x.SchoolName}</option>)}
           </select>
           <select className="input" value={deptFilter} onChange={(e) => { setDeptFilter(e.target.value); setPage(1); }} aria-label="Filter by department" style={{ maxWidth: 240 }}>
             <option value="">All departments</option>

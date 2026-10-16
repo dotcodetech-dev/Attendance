@@ -423,9 +423,9 @@ export const api = {
     const qs = s.toString();
     return request(`/masters/departments${qs ? `?${qs}` : ""}`);
   },
-  createDepartment: (payload: { OrganizationId: number; DepartmentName: string }) =>
+  createDepartment: (payload: { OrganizationId: number; DepartmentName: string; SchoolId?: number | null }) =>
     request("/masters/departments", { method: "POST", body: JSON.stringify(payload) }),
-  updateDepartment: (id: number, payload: { OrganizationId: number; DepartmentName: string; IsActive?: string }) =>
+  updateDepartment: (id: number, payload: { OrganizationId: number; DepartmentName: string; IsActive?: string; SchoolId?: number | null }) =>
     request(`/masters/departments/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   getDesignations: (includeInactive = false) =>
     request(`/masters/designations${includeInactive ? "?include_inactive=true" : ""}`),
@@ -442,10 +442,12 @@ export const api = {
 
   getSchools: (includeInactive = false) =>
     request(`/masters/schools${includeInactive ? "?include_inactive=true" : ""}`),
-  createSchool: (payload: { SchoolName: string }) =>
+  createSchool: (payload: { SchoolName: string; OrganizationId?: number | null }) =>
     request("/masters/schools", { method: "POST", body: JSON.stringify(payload) }),
-  updateSchool: (id: number, payload: { SchoolName: string; IsActive?: string }) =>
+  updateSchool: (id: number, payload: { SchoolName: string; IsActive?: string; OrganizationId?: number | null }) =>
     request(`/masters/schools/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  // Fill empty Organization > School > Department links from the employees' own data.
+  linkMastersFromEmployees: () => request("/masters/link-from-employees", { method: "POST" }),
 
   // Configurable student dropdowns (Registered Year / Batch / Category).
   getStudentOptions: (includeInactive = false) =>
@@ -726,7 +728,7 @@ export const api = {
     request("/role-config", { method: "PUT", body: JSON.stringify(payload) }),
   /** Campus roles: a role limited to one institution, with its own menu switches. */
   getCampusRoles: () => request("/role-config/campus-roles"),
-  saveCampusRole: (payload: { name: string; organization_id: number | null; permissions: Record<string, boolean>; original_name?: string | null }) =>
+  saveCampusRole: (payload: { name: string; organization_id: number | null; device_ids?: number[]; permissions: Record<string, boolean>; original_name?: string | null }) =>
     request("/role-config/campus-roles", { method: "PUT", body: JSON.stringify(payload) }),
   deleteCampusRole: (name: string) => request(`/role-config/campus-roles/${encodeURIComponent(name)}`, { method: "DELETE" }),
   /** The signed-in login: role, and for a campus role its institution and menus. */
@@ -734,6 +736,9 @@ export const api = {
 
   createUser: (payload: { login_name: string; password: string; role_name?: string; employee_code?: string }) =>
     request("/users", { method: "POST", body: JSON.stringify(payload) }),
+  getLogins: () => request("/users/logins"),
+  blockLogin: (payload: { login_name: string; blocked: boolean }) =>
+    request("/users/block", { method: "POST", body: JSON.stringify(payload) }),
   resetPassword: (payload: { login_name: string; new_password: string }) =>
     request("/users/reset-password", { method: "POST", body: JSON.stringify(payload) }),
 

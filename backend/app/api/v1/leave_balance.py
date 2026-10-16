@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
-from app.services.campus_scope import check_employee_code, deny_for_campus
+from app.services.campus_scope import check_employee_code, deny_for_campus, is_custom_role, role_allows, user_org_id
 from app.database import get_db
 from app.models.entities import Employee, EmployeeLeaveBalance, LeaveConfig
 from app.schemas.employee_leave_balance import (
@@ -108,7 +108,9 @@ def seed_balances(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    deny_for_campus(db, user, "Setting up every employee's balances")
+    # Every employee of every institution: only an Admin, or a custom role for all institutions with "Leave Types".
+    if is_custom_role(db, user) and (user_org_id(db, user) is not None or not role_allows(db, user, "config_leaves")):
+        deny_for_campus(db, user, "Setting up every employee's balances")
     """
     Initialise per-employee balances for a year from each leave type's MaxPerYear.
     Skips employee/type rows that already exist unless overwrite=true.

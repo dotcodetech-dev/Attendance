@@ -10,12 +10,36 @@ const EMPTY = {
 };
 
 // CSV columns: code,name,department,registered_year,batch,category,section,roll_no
+const CSV_HEADER = ["code", "name", "department", "registered_year", "batch", "category", "section", "roll_no"];
+
+/** A ready-to-fill import file: the header plus two example rows that use this site's own departments and
+ *  dropdown values, so it imports as it is. Opens in Excel (UTF-8 with BOM); save it back as CSV. */
+function downloadSampleCsv(departments: any[], registeredYears: string[], batches: string[], categories: string[]) {
+  const dept = (i: number) => departments[i % Math.max(departments.length, 1)]?.DepartmentName || "COMPUTER SCIENCE AND ENGINEERING";
+  const pick = (list: string[], fallback: string) => list[0] || fallback;
+  const cell = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  const lines = [
+    CSV_HEADER,
+    ["24CSE001", "Arun Kumar", dept(0), pick(registeredYears, "Jun 2024"), pick(batches, "2024"), pick(categories, "Full Time"), "A", "24CSE001"],
+    ["24CSE002", "Priya S", dept(1), pick(registeredYears, "Jun 2024"), pick(batches, "2024"), pick(categories, "Full Time"), "B", "24CSE002"],
+  ].map((r) => r.map(cell).join(","));
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n") + "\r\n"], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "students-import-sample.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function parseCsv(text: string, departments: any[]) {
   const byName = new Map(departments.map((d) => [d.DepartmentName.trim().toLowerCase(), d.DepartmentId]));
   const rows: any[] = [];
   const errors: string[] = [];
-  text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).forEach((line, i) => {
-    const c = line.split(",").map((x) => x.trim());
+  text.replace(/^\uFEFF/, "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).forEach((line, i) => {
+    const c = line.split(",").map((x) => x.trim().replace(/^"(.*)"$/, "$1").trim());
     if (i === 0 && /code/i.test(c[0])) return; // header
     const dept = byName.get((c[2] || "").toLowerCase());
     if (!c[0] || !c[1] || !dept) {
@@ -179,6 +203,10 @@ export function StudentsPage() {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <input ref={fileRef} type="file" accept=".csv" hidden onChange={(e) => onImport(e.target.files?.[0])} />
+          <button className="btn-device-ghost" onClick={() => downloadSampleCsv(departments, registeredYears, batches, categories)}
+            title="Download a sample file with the columns the import expects (code, name, department, registered year, batch, category, section, roll no)">
+            Sample CSV
+          </button>
           <button className="btn-device-ghost" onClick={() => fileRef.current?.click()} title="CSV: code,name,department,registered_year,batch,category,section,roll_no">Import CSV</button>
           <button className="btn btn-primary-purple" onClick={openNew}>+ Add Student</button>
         </div>

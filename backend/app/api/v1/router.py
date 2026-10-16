@@ -1,7 +1,7 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends
 
-from app.services.campus_scope import campus_guard, shared_read_only
+from app.services.campus_scope import campus_guard, shared_read_only, shared_unless
 from app.api.v1 import (
     attendance,
     auth,
@@ -52,7 +52,7 @@ api_router.include_router(dashboard.router, dependencies=_CAMPUS, prefix="/dashb
 api_router.include_router(shifts.router, dependencies=_SHARED, prefix="/shifts", tags=["shifts"])
 api_router.include_router(rosters.router, dependencies=_SHARED, prefix="/rosters", tags=["rosters"])
 api_router.include_router(holidays.router, dependencies=_SHARED, prefix="/holidays", tags=["holidays"])
-api_router.include_router(leave_config.router, dependencies=_SHARED, prefix="/leave-config", tags=["leave-config"])
+api_router.include_router(leave_config.router, dependencies=[Depends(shared_unless("config_leaves"))], prefix="/leave-config", tags=["leave-config"])
 api_router.include_router(leaves.router, dependencies=_CAMPUS, prefix="/leaves", tags=["leaves"])
 api_router.include_router(leave_approvals.router, dependencies=_SHARED, prefix="/leave-approvals", tags=["leave-approvals"])
 api_router.include_router(leave_balance.router, dependencies=_CAMPUS, prefix="/leave-balance", tags=["leave-balance"])
@@ -67,4 +67,5 @@ api_router.include_router(student_attendance.router, dependencies=_SHARED, prefi
 api_router.include_router(settings_api.router, dependencies=_SHARED, prefix="/settings", tags=["settings"])
 api_router.include_router(manual_entries.router, dependencies=_CAMPUS, prefix="/manual-entries", tags=["manual-entries"])
 api_router.include_router(role_config.router, dependencies=_SHARED, prefix="/role-config", tags=["role-config"])
-api_router.include_router(users.router, dependencies=_SHARED, prefix="/users", tags=["users"])
+# Logins check rights per endpoint: everyone may change their own password, which a router guard would block.
+api_router.include_router(users.router, prefix="/users", tags=["users"])

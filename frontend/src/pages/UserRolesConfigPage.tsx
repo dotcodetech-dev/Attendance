@@ -149,12 +149,13 @@ const GROUPS: { title: string; desc: string; keys: PermissionKey[] }[] = [
 // roles above, these ARE applied: a login with a campus role sees only its institution's devices, employees and
 // reports (enforced by the server) and only the menus switched on here.
 // ---------------------------------------------------------------------------------------------------------------
-type CampusRole = { name: string; organization_id: number | null; permissions: Record<string, boolean> };
+type CampusRole = { name: string; organization_id: number | null; device_ids?: number[]; permissions: Record<string, boolean> };
+type DeviceRow = { DeviceId: number; DeviceName: string; SerialNumber: string; OrganizationId?: number | null; DeviceType?: string | null };
 
 const CAMPUS_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
   employees: "Employees (manage, own institution)",
-  devices: "Devices (own institution)",
+  devices: "Devices (linked devices only)",
   enrollment: "Enrollment / Face attendance",
   transfer: "Transfer",
   commands: "Commands",
@@ -162,26 +163,28 @@ const CAMPUS_LABELS: Record<string, string> = {
   reports: "All reports",
   leave_entry: "Leave Entry (approved at once)",
   leave_approvals: "Leave Approvals",
+  config_leaves: "Leave Types (and leave balances)",
   ess_attendance: "ESS – My Attendance",
   ess_leaves: "ESS – My Leaves",
   ess_manual_entry: "ESS – Manual Entry / OD",
 };
 // One-click starting points for a new custom role.
 const PRESETS: { label: string; perms: string[] }[] = [
-  { label: "Reports + Leave Entry (Leave Section)", perms: ["reports", "leave_entry"] },
+  { label: "Reports + Leave Entry + Leave Types (Leave Section)", perms: ["reports", "leave_entry", "config_leaves"] },
   { label: "Admin's daily menus (campus)", perms: ["dashboard", "employees", "devices", "enrollment", "transfer", "commands", "logs", "reports", "leave_entry", "ess_attendance", "ess_leaves", "ess_manual_entry"] },
 ];
 
 const CAMPUS_GROUPS: { title: string; desc: string; keys: string[] }[] = [
-  { title: "Devices and staff", desc: "Only this institution", keys: ["dashboard", "employees", "devices", "enrollment", "transfer", "commands"] },
-  { title: "Reports and leave", desc: "Only this institution's staff", keys: ["logs", "reports", "leave_entry", "leave_approvals"] },
+  { title: "Devices and staff", desc: "Own institution, linked devices", keys: ["dashboard", "employees", "devices", "enrollment", "transfer", "commands"] },
+  { title: "Reports and leave", desc: "Only this institution's staff", keys: ["logs", "reports", "leave_entry", "leave_approvals", "config_leaves"] },
   { title: "ESS portal", desc: "Self-service pages", keys: ["ess_attendance", "ess_leaves", "ess_manual_entry"] },
 ];
 
-function CampusRoleEditor({ role, isNew, organizations, defaults, onSaved, onDeleted }: {
+function CampusRoleEditor({ role, isNew, organizations, devices, defaults, onSaved, onDeleted }: {
   role: CampusRole | null;
   isNew: boolean;
   organizations: { OrganizationId: number; OrgName: string }[];
+  devices: DeviceRow[];
   defaults: Record<string, boolean>;
   onSaved: (saved: CampusRole) => void;
   onDeleted: (name: string) => void;
@@ -189,19 +192,21 @@ function CampusRoleEditor({ role, isNew, organizations, defaults, onSaved, onDel
   const start = () => ({
     name: role?.name ?? "",
     organization_id: role?.organization_id ?? null,
+    device_ids: role?.device_ids ?? [],
     permissions: { ...defaults, ...(role?.permissions ?? {}) },
   });
   const [form, setForm] = useState(start);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  useEffect(() => { setForm(start()); setMsg(null); }, [role?.name, isNew]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const [devSearch, setDevSearch] = useState("");
+  useEffect(() => { setForm(start()); setMsg(null); setDevSearch(""); }, [role?.name, isNew]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async () => {
     if (!form.name.trim()) { setMsg({ ok: false, text: "Give the role a name, e.g. Campus 2 or Leave Section." }); return; }
     setBusy(true); setMsg(null);
     try {
       const saved = await api.saveCampusRole({
-        name: form.name.trim(), organization_id: form.organization_id, permissions: form.permissions,
+        name: form.name.trim(), organization_id: form.organization_id, device_ids: form.device_ids, permissions: form.permissions,
         original_name: isNew ? null : role?.name ?? null,
       });
       setMsg({ ok: true, text: `Saved. Give a login the role "${saved.name}" (Employees → Portal login) to use it.` });
@@ -221,6 +226,20 @@ function CampusRoleEditor({ role, isNew, organizations, defaults, onSaved, onDel
 
   const setPerm = (k: string, v: boolean) => setForm((f) => ({ ...f, permissions: { ...f.permissions, [k]: v } }));
   const orgName = organizations.find((o) => o.OrganizationId === form.organization_id)?.OrgName;
+  const orgOf = (id?: number | null) => organizations.find((o) => o.OrganizationId === id)?.OrgName;
+  const picked = new Set(form.device_ids);
+  const toggleDevice = (id: number, on: boolean) =>
+    setForm((f) => ({ ...f, device_ids: on ? [...f.device_ids.filter((d) => d !== id), id] : f.device_ids.filter((d) => d !== id) }));
+  // The role's institution's readers first, then the rest; ticked ones stay visible whatever the search says.
+  const shownDevices = useMemo(() => {
+    const q = devSearch.trim().toLowerCase();
+    return devices
+      .filter((d) => !q || picked.has(d.DeviceId) || [d.DeviceName, d.SerialNumber, orgOf(d.OrganizationId)]
+        .some((v) => v && String(v).toLowerCase().includes(q)))
+      .sort((a, b) => Number(b.OrganizationId === form.organization_id) - Number(a.OrganizationId === form.organization_id)
+        || (a.DeviceName || "").localeCompare(b.DeviceName || ""));
+  }, [devices, devSearch, form.device_ids, form.organization_id, organizations]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const instDevices = devices.filter((d) => form.organization_id != null && d.OrganizationId === form.organization_id);
   const applyPreset = (perms: string[]) =>
     setForm((f) => ({ ...f, permissions: Object.fromEntries(Object.keys(CAMPUS_LABELS).map((k) => [k, perms.includes(k)])) }));
 
@@ -228,9 +247,9 @@ function CampusRoleEditor({ role, isNew, organizations, defaults, onSaved, onDel
     <>
       <p className="roles-blurb">
         {form.organization_id
-          ? <>Limited to <strong>{orgName || "one institution"}</strong>: logins with this role see only that institution's devices, employees and reports.</>
+          ? <>Limited to <strong>{orgName || "one institution"}</strong>: logins with this role see only that institution's employees and reports, and only the linked devices below.</>
           : <>For <strong>all institutions</strong>.</>}{" "}
-        They see only the menus switched on below; students and configuration are never shown to this role.
+        They see only the menus switched on below; students and configuration (except Leave Types, when switched on) are never shown to this role.
       </p>
       <div className="section-card" style={{ marginBottom: 16 }}>
         <div className="form-row-2">
@@ -271,6 +290,49 @@ function CampusRoleEditor({ role, isNew, organizations, defaults, onSaved, onDel
           );
         })}
       </div>
+      <section className="section-card roles-devices" aria-labelledby="crole-devices">
+        <header className="roles-card-head">
+          <div>
+            <h3 id="crole-devices">Linked devices</h3>
+            <p>
+              {form.device_ids.length
+                ? <>This role sees only the <b>{form.device_ids.length}</b> ticked reader{form.device_ids.length === 1 ? "" : "s"}.</>
+                : form.organization_id
+                  ? <>None ticked: it sees every reader set to {orgName || "its institution"} ({instDevices.length}).</>
+                  : <>None ticked: it sees every reader.</>}
+            </p>
+          </div>
+          <div className="roles-devices-actions">
+            {instDevices.length > 0 && (
+              <button type="button" className="notif-link"
+                onClick={() => setForm((f) => ({ ...f, device_ids: Array.from(new Set([...f.device_ids, ...instDevices.map((d) => d.DeviceId)])) }))}>
+                Tick {orgName || "institution"} readers
+              </button>
+            )}
+            {form.device_ids.length > 0 && (
+              <button type="button" className="notif-link" onClick={() => setForm((f) => ({ ...f, device_ids: [] }))}>Clear</button>
+            )}
+          </div>
+        </header>
+        <input type="search" className="roles-devices-search" placeholder="Search devices by name, serial number or institution…"
+          value={devSearch} onChange={(e) => setDevSearch(e.target.value)} aria-label="Search devices" />
+        {shownDevices.length === 0 ? (
+          <p className="roles-devices-empty">{devices.length ? "No device matches." : "No devices yet."}</p>
+        ) : (
+          <ul className="roles-devices-list">
+            {shownDevices.map((d) => (
+              <li key={d.DeviceId}>
+                <label className={picked.has(d.DeviceId) ? "is-on" : ""}>
+                  <input type="checkbox" checked={picked.has(d.DeviceId)} onChange={(e) => toggleDevice(d.DeviceId, e.target.checked)} />
+                  <span className="roles-devices-name">{d.DeviceName || d.SerialNumber}</span>
+                  <span className="roles-devices-meta">{d.SerialNumber}{d.DeviceType ? ` · ${d.DeviceType}` : ""}</span>
+                  <span className="roles-devices-org">{orgOf(d.OrganizationId) || "No institution"}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
       <div className="roles-bar is-dirty">
         <span className="roles-bar-text">
           {msg ? <span className={msg.ok ? "note-ok" : "note-err"} style={{ margin: 0, fontWeight: 600 }} role="status">{msg.text}</span>
@@ -287,10 +349,12 @@ export function UserRolesConfigPage() {
   const [campusRoles, setCampusRoles] = useState<CampusRole[]>([]);
   const [campusDefaults, setCampusDefaults] = useState<Record<string, boolean>>({});
   const [organizations, setOrganizations] = useState<{ OrganizationId: number; OrgName: string }[]>([]);
+  const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [campusSel, setCampusSel] = useState<string | null>(null);   // a campus role name, "__new__", or null
   useEffect(() => {
     api.getCampusRoles().then((r: any) => { setCampusRoles(r.roles || []); setCampusDefaults(r.default_permissions || {}); }).catch(() => {});
     api.getOrganizations().then(setOrganizations).catch(() => setOrganizations([]));
+    api.getDevices().then((d: any) => setDevices(Array.isArray(d) ? d : [])).catch(() => setDevices([]));
   }, []);
   const [permissions, setPermissions] = useState(buildInitialState);
   const [saved, setSaved] = useState(() => JSON.stringify(buildInitialState()));
@@ -395,6 +459,7 @@ export function UserRolesConfigPage() {
           role={campusSel === "__new__" ? null : campusRoles.find((c) => c.name === campusSel) ?? null}
           isNew={campusSel === "__new__"}
           organizations={organizations}
+          devices={devices}
           defaults={campusDefaults}
           onSaved={(saved) => {
             setCampusRoles((list) => [...list.filter((c) => c.name !== saved.name && c.name !== campusSel), saved]
