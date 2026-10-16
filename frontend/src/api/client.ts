@@ -577,6 +577,28 @@ export const api = {
   updateStudent: (id: number, payload: unknown) =>
     request(`/students/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   deactivateStudent: (id: number) => request(`/students/${id}`, { method: "DELETE" }),
+  // Students from Excel / CSV with column mapping (same flow as the employee import).
+  studentImportInspect: async (file: File) => {
+    const form = new FormData(); form.append("file", file);
+    const token = getToken();
+    const res = await fetch(`${BASE_URL}/students/import/inspect`, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form });
+    if (!res.ok) throw new Error(await extractError(res));
+    return res.json();
+  },
+  studentImportPreview: async (file: File, mapping: unknown) => {
+    const form = new FormData(); form.append("file", file); form.append("mapping", JSON.stringify(mapping));
+    const token = getToken();
+    const res = await fetch(`${BASE_URL}/students/import/preview`, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form });
+    if (!res.ok) throw new Error(await extractError(res));
+    return res.json();
+  },
+  studentImportCommit: async (file: File, mapping: unknown) => {
+    const form = new FormData(); form.append("file", file); form.append("mapping", JSON.stringify(mapping));
+    const token = getToken();
+    const res = await fetch(`${BASE_URL}/students/import/commit`, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form });
+    if (!res.ok) throw new Error(await extractError(res));
+    return res.json();
+  },
   importStudents: (rows: unknown[]) =>
     request("/students/import", { method: "POST", body: JSON.stringify({ rows }) }),
   enrollStudentFromCamera: (code: string) =>

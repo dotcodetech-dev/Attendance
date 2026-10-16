@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -341,6 +341,45 @@ def promote_students(payload: PromoteIn, db: Session = Depends(get_db), _user=De
     db.commit()
     result["applied"] = True
     return result
+
+
+# ---- Excel / CSV import with column mapping (like Employees -> Import from Excel) ----
+
+def _import_mapping(raw: str) -> tuple[dict[str, int], int, Optional[int]]:
+    import json
+    try:
+        m = json.loads(raw or "{}")
+        cols = {str(k): int(v) for k, v in (m.get("columns") or {}).items()}
+        return cols, max(1, int(m.get("header_row") or 1)), (int(m["organization_id"]) if m.get("organization_id") else None)
+    except (ValueError, TypeError, AttributeError, KeyError):
+        raise HTTPException(400, "Bad column mapping.")
+
+
+@router.post("/import/inspect", dependencies=gated)
+async def inspect_student_import(file: UploadFile = File(...), db: Session = Depends(get_db), _user=Depends(get_current_user)):
+    """Header row, columns with samples, a guessed mapping and the suggested organization."""
+    from app.services.student_import import StudentImportService
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Empty file")
+    return StudentImportService(db).inspect(data, file.filename or "")
+
+
+@router.post("/import/preview", dependencies=gated)
+async def preview_student_import(file: UploadFile = File(...), mapping: str = Form(...), db: Session = Depends(get_db),
+                                 _user=Depends(get_current_user)):
+    """Dry run: every row checked and the masters it would add, nothing saved."""
+    from app.services.student_import import StudentImportService
+    cols, header_row, org_id = _import_mapping(mapping)
+    return StudentImportService(db).process(await file.read(), file.filename or "", cols, header_row, org_id, commit=False)
+
+
+@router.post("/import/commit", dependencies=gated)
+async def commit_student_import(file: UploadFile = File(...), mapping: str = Form(...), db: Session = Depends(get_db),
+                                _user=Depends(get_current_user)):
+    from app.services.student_import import StudentImportService
+    cols, header_row, org_id = _import_mapping(mapping)
+    return StudentImportService(db).process(await file.read(), file.filename or "", cols, header_row, org_id, commit=True)
 
 
 @router.post("/import", dependencies=gated)

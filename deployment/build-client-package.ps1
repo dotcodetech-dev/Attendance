@@ -199,7 +199,7 @@ Write-Host "  $((Get-ChildItem $wheels -Filter *.whl).Count) wheels"
 # 6. Installer, templates, SDK, prerequisites, docs
 # --------------------------------------------------------------------------
 Step "Copying installer + prerequisites"
-foreach ($f in "INSTALL.cmd", "UNINSTALL.cmd", "install.ps1", "install-config.psd1") {
+foreach ($f in "INSTALL.cmd", "UNINSTALL.cmd", "install.ps1", "install-config.psd1", "UPDATE.cmd", "update.ps1") {
     Copy-Item (Join-Path $installerSource $f) $OutputRoot -Force
 }
 Copy-Tree (Join-Path $installerSource "templates") (Join-Path $OutputRoot "templates")
@@ -235,4 +235,12 @@ if ($CreateZip) {
     if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
     Compress-Archive -Path (Join-Path $OutputRoot "*") -DestinationPath $zipPath -CompressionLevel Optimal
     Write-Host "Zip ready: $zipPath ($([math]::Round((Get-Item $zipPath).Length / 1MB, 1)) MB)" -ForegroundColor Green
+
+    # Update-only package for servers that are already installed: the code, the wheels and UPDATE.cmd
+    # (no prerequisites, no SQL / IIS questions; backend\.env is kept). -> <out>\<Brand>Update.zip
+    $updateZip = Join-Path (Split-Path $OutputRoot -Parent) "${brandSlug}Update.zip"
+    if (Test-Path $updateZip) { Remove-Item -Force $updateZip }
+    $parts = @("app", "wheels", "brand.txt", "UPDATE.cmd", "update.ps1") | ForEach-Object { Join-Path $OutputRoot $_ } | Where-Object { Test-Path $_ }
+    Compress-Archive -Path $parts -DestinationPath $updateZip -CompressionLevel Optimal
+    Write-Host "Update zip ready: $updateZip ($([math]::Round((Get-Item $updateZip).Length / 1MB, 1)) MB)" -ForegroundColor Green
 }

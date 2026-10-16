@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../../api/client";
 import { Req } from "../../components/Req";
+import { StudentImport } from "./StudentImport";
 import { DEFAULT_ORG_NAME, DeptYearFilter, todayIso, toNum, useDepartments, useSchools, useStudentOptions } from "./common";
 
 const EMPTY = {
@@ -34,29 +35,9 @@ function downloadSampleCsv(departments: any[], registeredYears: string[], batche
   URL.revokeObjectURL(url);
 }
 
-function parseCsv(text: string, departments: any[]) {
-  const byName = new Map(departments.map((d) => [d.DepartmentName.trim().toLowerCase(), d.DepartmentId]));
-  const rows: any[] = [];
-  const errors: string[] = [];
-  text.replace(/^\uFEFF/, "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).forEach((line, i) => {
-    const c = line.split(",").map((x) => x.trim().replace(/^"(.*)"$/, "$1").trim());
-    if (i === 0 && /code/i.test(c[0])) return; // header
-    const dept = byName.get((c[2] || "").toLowerCase());
-    if (!c[0] || !c[1] || !dept) {
-      errors.push(`Line ${i + 1}: needs code, name and a known department`);
-      return;
-    }
-    rows.push({
-      StudentCode: c[0], StudentName: c[1], DepartmentId: dept,
-      RegisteredYear: c[3] || null, Batch: c[4] || null, Category: c[5] || null,
-      Section: c[6] || null, RollNo: c[7] || null,
-    });
-  });
-  return { rows, errors };
-}
-
 export function StudentsPage() {
-  const departments = useDepartments();
+  const [mastersVersion, setMastersVersion] = useState(0);   // bumped after an import that may add departments
+  const departments = useDepartments(mastersVersion);
   const schools = useSchools();
   const { registeredYears, batches, categories } = useStudentOptions();
   const [summary, setSummary] = useState<{ years: string[]; departments: any[] }>({ years: [], departments: [] });
@@ -76,7 +57,7 @@ export function StudentsPage() {
   const [leaveDate, setLeaveDate] = useState(todayIso());
   const [leaveNote, setLeaveNote] = useState("");
   const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const load = () => {
     api.getStudents({ department_id: toNum(deptFilter), registered_year: regYearFilter || undefined, q: search || undefined, status: tab })
@@ -164,20 +145,6 @@ export function StudentsPage() {
     }
   };
 
-  const onImport = async (file?: File) => {
-    if (!file) return;
-    const { rows, errors } = parseCsv(await file.text(), departments);
-    if (!rows.length) { setStatus({ text: errors[0] || "No valid rows found.", ok: false }); return; }
-    try {
-      const r = await api.importStudents(rows);
-      const bad = errors.length + r.errors.length;
-      setStatus({ text: `Imported ${r.created} student(s)${bad ? `, ${bad} row(s) skipped` : ""}.`, ok: bad === 0 });
-      load();
-    } catch (e: any) {
-      setStatus({ text: e.message || "Import failed", ok: false });
-    }
-    if (fileRef.current) fileRef.current.value = "";
-  };
 
   const deptName = (id: string) => departments.find((d) => String(d.DepartmentId) === id)?.DepartmentName;
 
@@ -202,15 +169,19 @@ export function StudentsPage() {
           <p className="sub">Student master data by department and registered year.</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <input ref={fileRef} type="file" accept=".csv" hidden onChange={(e) => onImport(e.target.files?.[0])} />
           <button className="btn-device-ghost" onClick={() => downloadSampleCsv(departments, registeredYears, batches, categories)}
             title="Download a sample file with the columns the import expects (code, name, department, registered year, batch, category, section, roll no)">
             Sample CSV
           </button>
-          <button className="btn-device-ghost" onClick={() => fileRef.current?.click()} title="CSV: code,name,department,registered_year,batch,category,section,roll_no">Import CSV</button>
+          <button className="btn-device-ghost" onClick={() => setImportOpen(true)} title="Excel (.xlsx) or CSV: columns are matched for you and shown before anything is saved">Import Excel / CSV</button>
           <button className="btn btn-primary-purple" onClick={openNew}>+ Add Student</button>
         </div>
       </div>
+
+      {importOpen && (
+        <StudentImport organizations={organizations} onClose={() => setImportOpen(false)}
+          onDone={(msg) => { setImportOpen(false); setStatus({ text: msg, ok: true }); setMastersVersion((v) => v + 1); load(); }} />
+      )}
 
       {status && <p className={status.ok ? "note-ok" : "note-err"}>{status.text}</p>}
 

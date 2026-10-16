@@ -36,11 +36,11 @@ export const todayIso = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
-export function useDepartments() {
+export function useDepartments(refreshKey = 0) {
   const [departments, setDepartments] = useState<any[]>([]);
   useEffect(() => {
     api.getDepartments().then((d: any[]) => setDepartments(d.filter((x) => x.IsActive !== "N"))).catch(() => setDepartments([]));
-  }, []);
+  }, [refreshKey]);
   return departments;
 }
 
