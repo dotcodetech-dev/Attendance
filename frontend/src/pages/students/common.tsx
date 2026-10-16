@@ -44,6 +44,36 @@ export function useDepartments(refreshKey = 0) {
   return departments;
 }
 
+/** The fixed Section choices (the scholar list's "Unit": NA or Fellowship; ALL for every section). */
+export const SECTION_CHOICES = ["NA", "Fellowship", "ALL"];
+
+/** Section values in use (from the server) after the fixed choices, without duplicates. */
+export function useStudentSections(refreshKey = 0) {
+  const [sections, setSections] = useState<string[]>([]);
+  useEffect(() => {
+    api.getStudentSections().then((v: string[]) => setSections(Array.isArray(v) ? v : [])).catch(() => setSections([]));
+  }, [refreshKey]);
+  const seen = new Set<string>();
+  return [...SECTION_CHOICES, ...sections].filter((x) => {
+    const k = x.trim().toLowerCase();
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+/** Section filter: All sections, NA, Fellowship, ALL, then any other section in use. */
+export function SectionFilter({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: string[] }) {
+  return (
+    <label>Section
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">All sections</option>
+        {options.map((x) => <option key={x} value={x}>{x}</option>)}
+      </select>
+    </label>
+  );
+}
+
 export function DeptYearFilter({
   departments, departmentId, registeredYear, onDepartment, onRegisteredYear,
 }: {

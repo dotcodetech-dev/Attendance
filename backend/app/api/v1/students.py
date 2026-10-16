@@ -117,6 +117,7 @@ def list_students(
     registered_year: Optional[str] = None,
     batch: Optional[str] = None,
     category: Optional[str] = None,
+    section: Optional[str] = None,
     q: Optional[str] = None,
     include_inactive: bool = False,
     status: Optional[str] = Query(default=None, description="active | discontinued | completed | archived | all"),
@@ -145,6 +146,9 @@ def list_students(
         query = query.filter(Student.Batch == batch)
     if category:
         query = query.filter(Student.Category == category)
+    if section:
+        from app.services.student_attendance_service import section_filter
+        query = section_filter(query, section)
     if q:
         like = f"%{q.strip()}%"
         query = query.filter((Student.StudentName.like(like)) | (Student.StudentCode.like(like)) | (Student.RollNo.like(like)))
@@ -152,6 +156,13 @@ def list_students(
     schools = _school_names(db)
     rows = query.order_by(Student.DepartmentId, Student.RegisteredYear, Student.StudentName).all()
     return [_dto(s, names, schools) for s in rows]
+
+
+@router.get("/sections", dependencies=gated)
+def list_sections(db: Session = Depends(get_db), _user=Depends(get_current_user)) -> list[str]:
+    """Section values students have (for the Section dropdowns), e.g. NA, Fellowship."""
+    vals = {(s or "").strip() for (s,) in db.query(Student.Section).distinct() if (s or "").strip()}
+    return sorted(vals, key=lambda v: (v.lower() not in ("na", "fellowship", "all"), v.lower()))
 
 
 @router.get("/summary", dependencies=gated)

@@ -132,11 +132,21 @@ def _compute_day(day: date, shift: StudentShift, logs: list[datetime],
     return "Absent", None, None, 0, None
 
 
+def section_filter(q, section: Optional[str]):
+    """Students of one Section (e.g. NA, Fellowship). "NA" also matches students whose section was left empty."""
+    value = (section or "").strip()
+    if not value:
+        return q
+    if value.lower() in ("na", "n/a"):
+        return q.filter((Student.Section.is_(None)) | (Student.Section == "") | (func.lower(Student.Section).in_(("na", "n/a"))))
+    return q.filter(func.lower(Student.Section) == value.lower())
+
+
 def student_rows(db: Session, from_date: date, to_date: date,
                  department_id: Optional[int] = None, year: Optional[int] = None,
-                 registered_year: Optional[str] = None):
+                 registered_year: Optional[str] = None, section: Optional[str] = None):
     """Students (filtered) joined with processed rows in range."""
-    q = db.query(Student).filter(Student.IsActive == "Y")
+    q = section_filter(db.query(Student).filter(Student.IsActive == "Y"), section)
     if department_id:
         q = q.filter(Student.DepartmentId == department_id)
     if year:

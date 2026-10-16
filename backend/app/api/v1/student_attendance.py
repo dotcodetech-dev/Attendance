@@ -191,10 +191,10 @@ def clear_manual(student_code: str, on_date: date = Query(alias="date"),
 
 
 def _report(db: Session, from_date: date, to_date: date, department_id, year, refresh: bool,
-            registered_year=None):
+            registered_year=None, section=None):
     if to_date < from_date:
         raise HTTPException(400, "To date is before from date")
-    students = svc.student_rows(db, from_date, to_date, department_id, year, registered_year)
+    students = svc.student_rows(db, from_date, to_date, department_id, year, registered_year, section)
     codes = [s.StudentCode for s in students]
     if refresh and codes:
         try:
@@ -230,15 +230,17 @@ _REPORT_COLS = [
 @router.get("/report")
 def report(from_date: date, to_date: date, department_id: Optional[int] = None,
            year: Optional[int] = Query(default=None, ge=1, le=4), registered_year: Optional[str] = None,
+               section: Optional[str] = None,
            refresh: bool = True, db: Session = Depends(get_db), _user=Depends(get_current_user)):
-    return _report(db, from_date, to_date, department_id, year, refresh, registered_year)
+    return _report(db, from_date, to_date, department_id, year, refresh, registered_year, section)
 
 
 @router.get("/report/export.csv")
 def report_csv(from_date: date, to_date: date, department_id: Optional[int] = None,
                year: Optional[int] = Query(default=None, ge=1, le=4), registered_year: Optional[str] = None,
+               section: Optional[str] = None,
                db: Session = Depends(get_db), _user=Depends(get_current_user)):
-    rows = _report(db, from_date, to_date, department_id, year, True, registered_year)
+    rows = _report(db, from_date, to_date, department_id, year, True, registered_year, section)
     buf = io.StringIO()
     keys = [k for k, _ in _REPORT_COLS]
     w = csv.writer(buf)
@@ -269,6 +271,7 @@ def _report_table(rows: list[dict]) -> tuple[list[str], list[list]]:
 @router.get("/report/export.{fmt}")
 def report_export(fmt: str, from_date: date, to_date: date, department_id: Optional[int] = None,
                   year: Optional[int] = Query(default=None, ge=1, le=4), registered_year: Optional[str] = None,
+               section: Optional[str] = None,
                   db: Session = Depends(get_db), _user=Depends(get_current_user)):
     """Excel / PDF export of the student attendance report, styled like the Employee Attendance Report."""
     from fastapi import Response
@@ -277,11 +280,11 @@ def report_export(fmt: str, from_date: date, to_date: date, department_id: Optio
 
     if fmt not in ("xlsx", "pdf"):
         raise HTTPException(404, "Unknown format")
-    rows = _report(db, from_date, to_date, department_id, year, True, registered_year)
+    rows = _report(db, from_date, to_date, department_id, year, True, registered_year, section)
     headers, table = _report_table(rows)
     org = get_organization_settings(db)
     title = "Student Attendance Report"
-    subtitle = f"From {from_date} To {to_date}"
+    subtitle = f"From {from_date} To {to_date}" + (f"  ·  Section: {section}" if section else "")
     data = rx.simple_table(title, subtitle, headers, table, fmt, org=org)
     fname = f"student_attendance_{from_date}_{to_date}.{fmt}"
     return Response(content=data, media_type=rx.MEDIA_TYPES[fmt],

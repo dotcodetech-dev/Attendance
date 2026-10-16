@@ -553,8 +553,9 @@ export const api = {
   linkUser: (payload: { login_name: string; employee_code?: string | null; role_name?: string }) =>
     request("/users/link", { method: "POST", body: JSON.stringify(payload) }),
   getNotifications: () => request("/notifications"),
-  getStudents: (p: { department_id?: number; registered_year?: string; batch?: string; category?: string; year?: number; q?: string; include_inactive?: boolean; status?: string } = {}) => {
+  getStudents: (p: { department_id?: number; registered_year?: string; batch?: string; category?: string; section?: string; year?: number; q?: string; include_inactive?: boolean; status?: string } = {}) => {
     const s = new URLSearchParams();
+    if (p.section) s.set("section", p.section);
     if (p.status) s.set("status", p.status);
     if (p.department_id) s.set("department_id", String(p.department_id));
     if (p.registered_year) s.set("registered_year", p.registered_year);
@@ -566,6 +567,7 @@ export const api = {
     return request(`/students?${s.toString()}`);
   },
   getStudentSummary: () => request("/students/summary"),
+  getStudentSections: () => request("/students/sections"),
   discontinueStudent: (id: number, body: { Date?: string; Note?: string }) =>
     request(`/students/${id}/discontinue`, { method: "POST", body: JSON.stringify(body) }),
   completeStudent: (id: number, body: { Date?: string; Note?: string }) =>
@@ -647,16 +649,18 @@ export const api = {
     request("/student-attendance/manual/bulk", { method: "POST", body: JSON.stringify(payload) }),
   clearStudentManual: (student_code: string, date: string) =>
     request(`/student-attendance/manual?student_code=${encodeURIComponent(student_code)}&date=${date}`, { method: "DELETE" }),
-  getStudentReport: (p: { from_date: string; to_date: string; department_id?: number; registered_year?: string }) => {
+  getStudentReport: (p: { from_date: string; to_date: string; department_id?: number; registered_year?: string; section?: string }) => {
     const s = new URLSearchParams({ from_date: p.from_date, to_date: p.to_date });
     if (p.department_id) s.set("department_id", String(p.department_id));
     if (p.registered_year) s.set("registered_year", p.registered_year);
+    if (p.section) s.set("section", p.section);
     return request(`/student-attendance/report?${s.toString()}`);
   },
-  downloadStudentReport: async (fmt: "csv" | "xlsx" | "pdf", p: { from_date: string; to_date: string; department_id?: number; registered_year?: string }) => {
+  downloadStudentReport: async (fmt: "csv" | "xlsx" | "pdf", p: { from_date: string; to_date: string; department_id?: number; registered_year?: string; section?: string }) => {
     const s = new URLSearchParams({ from_date: p.from_date, to_date: p.to_date });
     if (p.department_id) s.set("department_id", String(p.department_id));
     if (p.registered_year) s.set("registered_year", p.registered_year);
+    if (p.section) s.set("section", p.section);
     const token = getToken();
     const res = await fetch(`${BASE_URL}/student-attendance/report/export.${fmt}?${s.toString()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},

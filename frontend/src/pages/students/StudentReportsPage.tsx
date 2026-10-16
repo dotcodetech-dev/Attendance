@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { api } from "../../api/client";
-import { DeptYearFilter, toNum, todayIso, useDepartments } from "./common";
+import { DeptYearFilter, SectionFilter, toNum, todayIso, useDepartments, useStudentSections } from "./common";
 
 const monthStart = () => todayIso().slice(0, 8) + "01";
 
@@ -11,11 +11,14 @@ export function StudentReportsPage() {
   const [to, setTo] = useState(todayIso());
   const [deptFilter, setDeptFilter] = useState("");
   const [regYearFilter, setRegYearFilter] = useState("");
+  const [sectionFilter, setSectionFilter] = useState("");
+  const sections = useStudentSections();
   const [rows, setRows] = useState<any[] | null>(null);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const params = () => ({ from_date: from, to_date: to, department_id: toNum(deptFilter), registered_year: regYearFilter || undefined });
+  const params = () => ({ from_date: from, to_date: to, department_id: toNum(deptFilter), registered_year: regYearFilter || undefined,
+    section: sectionFilter || undefined });
 
   const run = async () => {
     setLoading(true); setMsg("");
@@ -32,7 +35,7 @@ export function StudentReportsPage() {
       <div className="page-head">
         <div>
           <h2>Student Attendance Report</h2>
-          <p className="sub">Attendance summary per student, filtered by department and registered year.</p>
+          <p className="sub">Attendance summary per student, filtered by department, registered year and section.</p>
         </div>
       </div>
       <div className="section-card">
@@ -40,6 +43,7 @@ export function StudentReportsPage() {
           <label>From<input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
           <label>To<input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
           <DeptYearFilter departments={departments} departmentId={deptFilter} registeredYear={regYearFilter} onDepartment={setDeptFilter} onRegisteredYear={setRegYearFilter} />
+          <SectionFilter value={sectionFilter} onChange={setSectionFilter} options={sections} />
         </div>
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           <button className="btn btn-primary-purple" onClick={run} disabled={loading}>{loading ? "Loading…" : "Generate"}</button>
@@ -51,16 +55,16 @@ export function StudentReportsPage() {
         {msg && <p className="note-err">{msg}</p>}
         {rows && (
           <table className="table table-compact student-report">
-            <thead><tr><th>Code</th><th>Name</th><th>Dept</th><th>Registered Year</th><th>Present</th><th>Late</th><th>Half day</th><th>Leave</th><th>Absent</th><th>%</th></tr></thead>
+            <thead><tr><th>Code</th><th>Name</th><th>Dept</th><th>Registered Year</th><th>Section</th><th>Present</th><th>Late</th><th>Half day</th><th>Leave</th><th>Absent</th><th>%</th></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.StudentCode}>
-                  <td>{r.StudentCode}</td><td><strong>{r.StudentName}</strong></td><td>{r.DepartmentName}</td><td>{r.RegisteredYear}</td>
+                  <td>{r.StudentCode}</td><td><strong>{r.StudentName}</strong></td><td>{r.DepartmentName}</td><td>{r.RegisteredYear}</td><td>{r.Section || "—"}</td>
                   <td>{r.Present}</td><td>{r.Late}</td><td>{r.HalfDay}</td><td>{r.Leave}</td><td>{r.Absent}</td>
                   <td className={pctClass(r.Percentage)}>{r.Percentage != null ? `${r.Percentage}%` : "—"}</td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={10} style={{ color: "var(--text-muted)" }}>No students match.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={11} style={{ color: "var(--text-muted)" }}>No students match.</td></tr>}
             </tbody>
           </table>
         )}

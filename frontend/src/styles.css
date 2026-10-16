@@ -3482,6 +3482,10 @@ label > span > .req, .field-label > .req { margin-left: 3px; }
 .roles-card { margin-bottom: 0; }
 .roles-devices { margin: 16px 0 0; }
 .idle-overlay { z-index: 2000; }
+.student-form-dialog { width: min(860px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; padding: 22px 24px; background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); }
+.student-form-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.student-form-head h3 { margin: 0; font-size: 18px; font-weight: 800; }
+.student-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .idle-dialog { max-width: 420px; padding: 24px; background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); }
 .idle-dialog h3 { margin: 0 0 8px; font-size: 18px; font-weight: 800; }
 .idle-dialog p { margin: 0 0 18px; color: var(--text-muted); font-size: 14.5px; line-height: 1.5; }

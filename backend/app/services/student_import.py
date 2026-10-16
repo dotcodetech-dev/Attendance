@@ -47,7 +47,7 @@ _ALIASES: dict[str, list[str]] = {
     "RegisteredYear": ["registeredyear", "registeredsession", "session", "admissionsession", "subdivision"],
     "Batch": ["batch", "admissionyear", "division"],
     "Category": ["category", "mode", "studycategory"],
-    "Section": ["section"],
+    "Section": ["section", "unit", "studentsection"],
     "RegisteredDate": ["dateofreg", "dateofregistration", "registereddate", "regdate", "dateofadmission",
                        "admissiondate", "doj", "dateofjoining"],
     "Status": ["status", "currentstatus"],
@@ -97,6 +97,10 @@ def _reg_year(text: str) -> Optional[str]:
     t = text.strip()
     if not t:
         return None
+    # A date (a "Date of Reg" column picked for Registered Year): its month and year.
+    d = _iso_date(t)
+    if d:
+        return f"{_MONTH_NAMES[int(d[5:7]) - 1].title()} {d[:4]}"
     m = re.search(r"([A-Za-z]{3,9})[\s\-/,]*(\d{4})", t)
     if m and m.group(1)[:3].lower() in _MONTH_NAMES:
         return f"{m.group(1)[:3].title()} {m.group(2)}"
@@ -112,6 +116,16 @@ def _category(text: str) -> Optional[str]:
         return "Full Time"
     if "part" in low:
         return "Part Time"
+    return t[:20]
+
+
+def _section(text: str) -> Optional[str]:
+    """Section as written (e.g. Fellowship), "NA" kept as NA (it is one of the Section choices)."""
+    t = text.strip()
+    if not t:
+        return None
+    if t.lower() in ("na", "n/a"):
+        return "NA"
     return t[:20]
 
 
@@ -211,6 +225,10 @@ class StudentImportService:
                 mapping.pop("Section")
                 if "School" not in mapping:
                     mapping["School"] = sec
+                # then a "Unit" column (NA / Fellowship on the scholar list) is the section
+                unit = next((i for i, k in enumerate(keys) if k in {"unit", "studentsection"} and i not in mapping.values()), None)
+                if unit is not None:
+                    mapping["Section"] = unit
         # Prefer the registration date over a birth date for "Registered Date"; fall back to D.O.B.
         if "RegisteredDate" not in mapping:
             dob = next((i for i, k in enumerate(keys) if k in {"dob", "dateofbirth"} and i not in mapping.values()), None)
@@ -377,7 +395,7 @@ class StudentImportService:
                     "RegisteredYear": _reg_year(get(r, "RegisteredYear")),
                     "Batch": (get(r, "Batch") or None) and get(r, "Batch")[:20],
                     "Category": _category(get(r, "Category")),
-                    "Section": (get(r, "Section") if not _blank(get(r, "Section")) else "")[:20] or None,
+                    "Section": _section(get(r, "Section")),
                     "DateOfBirth": _iso_date(r[mapping["RegisteredDate"]]) if "RegisteredDate" in mapping and mapping["RegisteredDate"] < len(r) else None,
                     "Status": _status(get(r, "Status")),
                 }

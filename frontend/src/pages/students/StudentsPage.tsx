@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import { Req } from "../../components/Req";
 import { StudentImport } from "./StudentImport";
-import { DEFAULT_ORG_NAME, DeptYearFilter, todayIso, toNum, useDepartments, useSchools, useStudentOptions } from "./common";
+import { DEFAULT_ORG_NAME, DeptYearFilter, SectionFilter, todayIso, toNum, useDepartments, useSchools, useStudentOptions, useStudentSections } from "./common";
 
 const EMPTY = {
   StudentCode: "", StudentName: "", DepartmentId: "", RegisteredYear: "", Batch: "",
@@ -38,14 +38,15 @@ function downloadSampleCsv(departments: any[], registeredYears: string[], batche
 export function StudentsPage() {
   const [mastersVersion, setMastersVersion] = useState(0);   // bumped after an import that may add departments
   const departments = useDepartments(mastersVersion);
+  const sectionChoices = useStudentSections(mastersVersion);
   const schools = useSchools();
   const { registeredYears, batches, categories } = useStudentOptions();
-  const [summary, setSummary] = useState<{ years: string[]; departments: any[] }>({ years: [], departments: [] });
   const [students, setStudents] = useState<any[]>([]);
   const [organizations, setOrganizations] = useState<any[]>([]);
   const [orgFilter, setOrgFilter] = useState(""); // "" = all institutions
   const [deptFilter, setDeptFilter] = useState("");
   const [regYearFilter, setRegYearFilter] = useState("");
+  const [sectionFilter, setSectionFilter] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20); // -1 = All
@@ -58,13 +59,14 @@ export function StudentsPage() {
   const [leaveNote, setLeaveNote] = useState("");
   const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [sectionOther, setSectionOther] = useState(false);   // typing a section that is not in the list
 
   const load = () => {
-    api.getStudents({ department_id: toNum(deptFilter), registered_year: regYearFilter || undefined, q: search || undefined, status: tab })
+    api.getStudents({ department_id: toNum(deptFilter), registered_year: regYearFilter || undefined, section: sectionFilter || undefined,
+      q: search || undefined, status: tab })
       .then(setStudents).catch((e) => setStatus({ text: e.message, ok: false }));
-    api.getStudentSummary().then(setSummary).catch(() => setSummary({ years: [], departments: [] }));
   };
-  useEffect(load, [deptFilter, regYearFilter, search, tab]);
+  useEffect(load, [deptFilter, regYearFilter, sectionFilter, search, tab]);
   useEffect(() => {
     api.getOrganizations().then((orgs: any[]) => {
       setOrganizations(orgs);
@@ -80,6 +82,7 @@ export function StudentsPage() {
   const openNew = () => {
     setEditingId(null);
     setForm({ ...EMPTY, DepartmentId: deptFilter, RegisteredYear: regYearFilter || "" });
+    setSectionOther(false);
     setShowForm(true);
   };
   const openEdit = (s: any) => {
@@ -90,6 +93,7 @@ export function StudentsPage() {
       RegisteredYear: s.RegisteredYear || "", Batch: s.Batch || "", Category: s.Category || "",
       SchoolId: s.SchoolId ? String(s.SchoolId) : "",
     });
+    setSectionOther(false);
     setShowForm(true);
   };
 
@@ -106,6 +110,7 @@ export function StudentsPage() {
       if (editingId) await api.updateStudent(editingId, payload);
       else await api.createStudent(payload);
       setStatus({ text: editingId ? "Student updated." : "Student added.", ok: true });
+      setMastersVersion((v) => v + 1);
       setShowForm(false);
       load();
     } catch (e: any) {
@@ -146,6 +151,13 @@ export function StudentsPage() {
   };
 
 
+  const dupNames = new Set(departments.map((d: any) => String(d.DepartmentName).trim().toLowerCase())
+    .filter((n: string, i: number, all: string[]) => all.indexOf(n) !== i));
+  const deptLabel = (d: any) => dupNames.has(String(d.DepartmentName).trim().toLowerCase())
+    ? `${d.DepartmentName} · ${organizations.find((o: any) => o.OrganizationId === d.OrganizationId)?.OrgName ?? ""}` : d.DepartmentName;
+  // Section dropdown: NA and ALL first, then the sections students already have (and the one being edited).
+  const sectionOptions = form.Section && !sectionOther && !sectionChoices.some((x) => x.toLowerCase() === form.Section.toLowerCase())
+    ? [...sectionChoices, form.Section] : sectionChoices;
   const deptName = (id: string) => departments.find((d) => String(d.DepartmentId) === id)?.DepartmentName;
 
   // Institution filter: students/departments belong to an organization via the department master.
@@ -153,8 +165,6 @@ export function StudentsPage() {
   const inOrg = (deptId: any) => !orgFilter || deptOrg.get(Number(deptId)) === orgFilter;
   const deptsForOrg = orgFilter ? departments.filter((d: any) => String(d.OrganizationId ?? "") === orgFilter) : departments;
   const filteredStudents = students.filter((s: any) => inOrg(s.DepartmentId));
-  const summaryDepts = summary.departments.filter((d: any) => inOrg(d.DepartmentId));
-  const summaryYears = summary.years;
   // Client-side pagination of the (already server-filtered) list.
   const effSize = pageSize === -1 ? filteredStudents.length || 1 : pageSize;
   const totalPages = Math.max(1, Math.ceil(filteredStudents.length / effSize));
@@ -185,24 +195,6 @@ export function StudentsPage() {
 
       {status && <p className={status.ok ? "note-ok" : "note-err"}>{status.text}</p>}
 
-      <div className="section-card" style={{ marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Department × Registered Year</h3>
-        {summaryDepts.length === 0 ? <p style={{ color: "var(--text-muted)" }}>No students yet.</p> : (
-          <table className="table table-compact">
-            <thead><tr><th>Department</th>{summaryYears.map((y) => <th key={y}>{y}</th>)}<th>Total</th></tr></thead>
-            <tbody>
-              {summaryDepts.map((d) => (
-                <tr key={d.DepartmentId}>
-                  <td><strong>{d.DepartmentName}</strong></td>
-                  {summaryYears.map((y) => <td key={y}>{d.years[y] || 0}</td>)}
-                  <td><strong>{d.total}</strong></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
       {leaving && (
         <div className="section-card" style={{ marginBottom: 16 }}>
           <h3 style={{ marginTop: 0 }}>{leaving.kind === "discontinue" ? "Discontinue" : "Mark completed:"} {leaving.s.StudentName}</h3>
@@ -222,8 +214,13 @@ export function StudentsPage() {
       )}
 
       {showForm && (
-        <div className="section-card" style={{ marginBottom: 16 }}>
-          <h3 style={{ marginTop: 0 }}>{editingId ? "Edit Student" : "New Student"}</h3>
+        <div className="modal-overlay" onClick={() => setShowForm(false)}>
+        <div className="modal-dialog student-form-dialog" role="dialog" aria-modal="true" aria-labelledby="student-form-title"
+          onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === "Escape") setShowForm(false); }}>
+          <div className="student-form-head">
+            <h3 id="student-form-title">{editingId ? "Edit Student" : "New Student"}</h3>
+            <button type="button" className="modal-close" onClick={() => setShowForm(false)} aria-label="Close">×</button>
+          </div>
           <div className="form-row-2">
             <label><span>Student Code (Face ID) <Req /></span><input value={form.StudentCode} disabled={!!editingId} placeholder="e.g. CS24001" onChange={(e) => set("StudentCode", e.target.value)} />
               <small className="field-hint">The ID the camera or device uses to recognise this student. It links their face and punches to this record, so it must match the ID enrolled on the device. It cannot be changed after saving.</small></label>
@@ -231,7 +228,7 @@ export function StudentsPage() {
             <label><span>Department <Req /></span>
               <select value={form.DepartmentId} onChange={(e) => set("DepartmentId", e.target.value)}>
                 <option value="">Select…</option>
-                {departments.map((d) => <option key={d.DepartmentId} value={d.DepartmentId}>{d.DepartmentName}</option>)}
+                {departments.map((d) => <option key={d.DepartmentId} value={d.DepartmentId}>{deptLabel(d)}</option>)}
               </select>
             </label>
             <label>Registered Year
@@ -258,15 +255,25 @@ export function StudentsPage() {
                 {schools.map((s) => <option key={s.SchoolId} value={s.SchoolId}>{s.SchoolName}</option>)}
               </select>
             </label>
-            <label>Section<input value={form.Section} onChange={(e) => set("Section", e.target.value)} /></label>
+            <label>Section
+              <select value={sectionOther ? "__other__" : form.Section}
+                onChange={(e) => { const v = e.target.value; setSectionOther(v === "__other__"); set("Section", v === "__other__" ? "" : v); }}>
+                <option value="">Select…</option>
+                {sectionOptions.map((x) => <option key={x} value={x}>{x}</option>)}
+                <option value="__other__">Other…</option>
+              </select>
+              {sectionOther && <input value={form.Section} maxLength={20} placeholder="Type the section, e.g. A" autoFocus
+                onChange={(e) => set("Section", e.target.value)} style={{ marginTop: 6 }} />}
+            </label>
             <label>Roll No<input value={form.RollNo} onChange={(e) => set("RollNo", e.target.value)} /></label>
             <label>Registered Date<input type="date" value={form.DateOfBirth} onChange={(e) => set("DateOfBirth", e.target.value)} /></label>
           </div>
-          <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-            <button className="btn btn-primary-purple" onClick={save}
-              disabled={!form.StudentCode || !form.StudentName || !form.DepartmentId}>Save</button>
+          <div className="student-form-actions">
             <button className="btn-device-ghost" onClick={() => setShowForm(false)}>Cancel</button>
+            <button className="btn btn-primary-purple" onClick={save}
+              disabled={!form.StudentCode || !form.StudentName || !form.DepartmentId}>{editingId ? "Save changes" : "Add student"}</button>
           </div>
+        </div>
         </div>
       )}
 
@@ -289,6 +296,7 @@ export function StudentsPage() {
           </label>
           <DeptYearFilter departments={deptsForOrg} departmentId={deptFilter} registeredYear={regYearFilter}
             onDepartment={setDeptFilter} onRegisteredYear={setRegYearFilter} />
+          <SectionFilter value={sectionFilter} onChange={setSectionFilter} options={sectionChoices} />
           <label>Search<input value={search} placeholder="Name, code or roll no" onChange={(e) => setSearch(e.target.value)} /></label>
         </div>
         <table className="table table-compact">
