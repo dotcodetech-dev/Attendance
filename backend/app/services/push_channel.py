@@ -29,19 +29,15 @@ SDK_PROBE_SECONDS = 2.0        # fast TCP probe before we commit to a 30 s SDK a
 # handshake) keep visible-light faces and fingerprints in the BIODATA table and only answer the
 # tablename= form (replies arrive on /iclock/querydata). Both forms are sent; a reader ignores the
 # ones it does not know.
-# The photo tables come last: AI-face readers keep each person's enrolment photo (biophoto) and display picture
-# (userpic) apart from the face template, and only send them when asked - without these, most people on an AI
-# reader had a face but no photo on the server.
-PHOTO_QUERY_COMMANDS = [
-    "DATA QUERY tablename=biophoto,fielddesc=*,filter=*",
-    "DATA QUERY tablename=userpic,fielddesc=*,filter=*",
-]
+# "DATA QUERY USERINFO" is what makes these readers send their users' photos: each person's USERPIC comes with
+# them through OPERLOG (checked on the college's ZHM AI readers). They answer -1004 to the tablename=biophoto /
+# tablename=userpic forms and -1 to "DATA QUERY BIOPHOTO|USERPIC PIN=..", so those are not sent. A reader only
+# has a photo for people enrolled on it with one; a face template sent from the server comes without a photo.
 USER_REFRESH_COMMANDS = [
     "CHECK",
     "DATA QUERY USERINFO", "DATA QUERY FINGERTMP", "DATA QUERY FACE",
     "DATA QUERY tablename=user,fielddesc=*,filter=*",
     "DATA QUERY tablename=biodata,fielddesc=*,filter=*",
-    *PHOTO_QUERY_COMMANDS,
 ]
 
 
@@ -142,13 +138,20 @@ def queue_commands(db: Session, device: Device, commands: list[str], title: str)
     return len(commands)
 
 
-def queue_photo_upload(db: Session, device: Device) -> int:
-    """Ask a push reader to upload its photo tables (once: not again while an earlier request is still waiting)."""
-    pending = {c for (c,) in db.query(DeviceCommand.DeviceCommand)
+def queue_photo_upload(db: Session, device: Device, code: str) -> Optional[DeviceCommand]:
+    """Ask a push reader to send one person (and so their photo, if it has one). Reuses a request still waiting."""
+    text = f"DATA QUERY USERINFO PIN={code}"
+    waiting = (db.query(DeviceCommand)
                .filter(DeviceCommand.DeviceId == device.DeviceId, DeviceCommand.Status == "Pending",
-                       DeviceCommand.DeviceCommand.in_(PHOTO_QUERY_COMMANDS))}
-    todo = [c for c in PHOTO_QUERY_COMMANDS if c not in pending]
-    return queue_commands(db, device, todo, "Upload photos from device") if todo else 0
+                       DeviceCommand.DeviceCommand == text).first())
+    if waiting is not None:
+        return waiting
+    row = DeviceCommand(DeviceId=device.DeviceId, Title="Fetch photo from device", DeviceCommand=text,
+                        Status="Pending", Type="push", CreationDate=datetime.utcnow())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 def queue_user_refresh(db: Session, device: Device) -> int:

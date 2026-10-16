@@ -446,6 +446,23 @@ export const api = {
     request("/masters/schools", { method: "POST", body: JSON.stringify(payload) }),
   updateSchool: (id: number, payload: { SchoolName: string; IsActive?: string; OrganizationId?: number | null }) =>
     request(`/masters/schools/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  // Organization > School > Department from an Excel sheet; commit=false is a dry run (what would change).
+  importHierarchy: async (file: File, commit: boolean, orgMap: Record<string, number | null>) => {
+    const token = getToken();
+    const form = new FormData();
+    form.append("file", file);
+    form.append("commit", commit ? "true" : "false");
+    form.append("org_map", JSON.stringify(orgMap));
+    const res = await fetch(`${BASE_URL}/masters/hierarchy-import`, {
+      method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form,
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try { const parsed = await res.json(); if (typeof parsed?.detail === "string") detail = parsed.detail; } catch { /* keep default */ }
+      throw new Error(detail);
+    }
+    return res.json();
+  },
   // Fill empty Organization > School > Department links from the employees' own data.
   linkMastersFromEmployees: () => request("/masters/link-from-employees", { method: "POST" }),
 

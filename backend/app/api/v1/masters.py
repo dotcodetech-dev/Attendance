@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import io
+import json
+import re
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -225,6 +229,21 @@ def _school_dto(s: School) -> dict:
             "OrganizationId": s.OrganizationId}
 
 
+def _norm(name: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", (name or "").strip()).lower()
+
+
+def _school_clash(db: Session, name: str, org_id: Optional[int], exclude_id: Optional[int] = None) -> bool:
+    """School names are unique inside one organization (the same school, e.g. School of Home Science, can exist
+    for Main Campus and for Ph D Scholars). Schools not linked to an organization yet are not compared."""
+    if org_id is None:
+        return False
+    q = db.query(School).filter(School.OrganizationId == org_id, func.lower(School.SchoolName) == name.strip().lower())
+    if exclude_id is not None:
+        q = q.filter(School.SchoolId != exclude_id)
+    return q.first() is not None
+
+
 def _check_org(db: Session, org_id: Optional[int]) -> None:
     if org_id is not None and not db.get(Organization, org_id):
         raise HTTPException(404, "Organization not found")
@@ -246,9 +265,9 @@ def create_school(payload: SchoolIn, db: Session = Depends(get_db), _user=Depend
     name = payload.SchoolName.strip()
     if not name:
         raise HTTPException(400, "School name is required")
-    if db.query(School).filter(func.lower(School.SchoolName) == name.lower()).first():
-        raise HTTPException(400, "School already exists")
     _check_org(db, payload.OrganizationId)
+    if _school_clash(db, name, payload.OrganizationId):
+        raise HTTPException(400, "This organization already has a school with that name")
     row = School(SchoolName=name, IsActive=_active(payload.IsActive), OrganizationId=payload.OrganizationId)
     db.add(row)
     db.commit()
@@ -262,9 +281,9 @@ def update_school(school_id: int, payload: SchoolIn, db: Session = Depends(get_d
     if not row:
         raise HTTPException(404, "School not found")
     name = payload.SchoolName.strip() or row.SchoolName
-    clash = db.query(School).filter(func.lower(School.SchoolName) == name.lower(), School.SchoolId != school_id).first()
-    if clash:
-        raise HTTPException(400, "School already exists")
+    target_org = payload.OrganizationId if "OrganizationId" in payload.model_fields_set else row.OrganizationId
+    if _school_clash(db, name, target_org, exclude_id=school_id):
+        raise HTTPException(400, "This organization already has a school with that name")
     row.SchoolName = name  # employees store the id, so nothing else needs renaming
     row.IsActive = _active(payload.IsActive)
     if "OrganizationId" in payload.model_fields_set and payload.OrganizationId != row.OrganizationId:
@@ -308,6 +327,170 @@ def link_from_employees(db: Session = Depends(get_db), _user=Depends(get_current
     left_depts = db.query(DepartmentMaster).filter(DepartmentMaster.SchoolId.is_(None)).count()
     return {"schools_linked": schools_linked, "departments_linked": depts_linked,
             "schools_unlinked": left_schools, "departments_unlinked": left_depts}
+
+
+# ---- Import Organization > School > Department from Excel ----
+
+def _read_hierarchy_rows(data: bytes, filename: str) -> list[tuple[str, str, Optional[str]]]:
+    """(organization, school, department) rows. Blank Organization / School cells repeat the one above, as in a
+    sheet laid out with merged-looking groups. The first row with "organization" / "school" in it is the header."""
+    raw: list[list] = []
+    if filename.lower().endswith(".csv"):
+        import csv
+        text = data.decode("utf-8-sig", errors="replace")
+        raw = [row for row in csv.reader(io.StringIO(text))]
+    else:
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        except Exception as exc:
+            raise HTTPException(400, f"Could not read the file as Excel (.xlsx): {exc.__class__.__name__}")
+        raw = [list(r) for r in wb.worksheets[0].iter_rows(values_only=True)]
+    cols = None
+    rows: list[tuple[str, str, Optional[str]]] = []
+    org = school = None
+    for r in raw:
+        cells = [("" if v is None else str(v)).strip() for v in r]
+        if cols is None:
+            low = [c.lower() for c in cells]
+            o = next((i for i, c in enumerate(low) if "organi" in c or "institution" in c), None)
+            sc = next((i for i, c in enumerate(low) if "school" in c), None)
+            d = next((i for i, c in enumerate(low) if "depart" in c), None)
+            if o is not None and sc is not None:
+                cols = (o, sc, d)
+            continue
+        get = lambda i: cells[i] if i is not None and i < len(cells) else ""
+        o_val, s_val, d_val = get(cols[0]), get(cols[1]), get(cols[2])
+        if o_val:
+            org, school = o_val, None
+        if s_val:
+            school = s_val
+        if not (o_val or s_val or d_val):
+            continue
+        if org and school:
+            rows.append((org, school, d_val or None))
+    if cols is None:
+        raise HTTPException(400, "No header row found: the sheet needs Organization, School and Department columns.")
+    if not rows:
+        raise HTTPException(400, "The sheet has no organization / school rows.")
+    return rows
+
+
+def _suggest_org(name: str, orgs: list[Organization]) -> Optional[int]:
+    """Best existing organization for a name in the file: "Main Campus" -> "Main Campus/AHS/EDU/SF",
+    "Engg campus" -> "Engineering Campus Staff", "Ph D Scholar" -> "PH. D SCHOLARS"."""
+    words = lambda t: [w for w in re.split(r"[^a-z0-9]+", t.lower()) if w]
+    want = words(name)
+    best, best_score = None, 0.0
+    for o in orgs:
+        have = words(o.OrgName)
+        if want == have:
+            return o.OrganizationId
+        hits = sum(1 for w in want if any(h.startswith(w[:3]) or w.startswith(h[:3]) for h in have))
+        score = hits / max(len(want), 1) - 0.01 * abs(len(have) - len(want))
+        if score > best_score:
+            best, best_score = o.OrganizationId, score
+    return best if best_score >= 0.6 else None
+
+
+def _apply_hierarchy(db: Session, rows, org_map: dict[str, Optional[int]]) -> dict:
+    stats = {"organizations_created": 0, "schools_created": 0, "schools_linked": 0, "schools_existing": 0,
+             "departments_created": 0, "departments_linked": 0, "departments_existing": 0}
+    org_ids: dict[str, int] = {}
+    for name in dict.fromkeys(o for o, _, _ in rows):
+        mapped = org_map.get(name)
+        if mapped:
+            if not db.get(Organization, mapped):
+                raise HTTPException(400, f'Organization for "{name}" no longer exists; reload and pick again.')
+            org_ids[name] = mapped
+            continue
+        same = next((o for o in db.query(Organization) if _norm(o.OrgName) == _norm(name)), None)
+        if same is None:
+            same = Organization(OrgName=name.strip(), IsActive="Y")
+            db.add(same)
+            db.flush()
+            stats["organizations_created"] += 1
+        org_ids[name] = same.OrganizationId
+
+    school_ids: dict[tuple[int, str], int] = {}
+    for org_name, school_name, dept_name in rows:
+        org_id = org_ids[org_name]
+        key = (org_id, _norm(school_name))
+        if key not in school_ids:
+            linked = next((x for x in db.query(School).filter(School.OrganizationId == org_id)
+                           if _norm(x.SchoolName) == key[1]), None)
+            if linked is not None:
+                stats["schools_existing"] += 1
+            else:
+                linked = next((x for x in db.query(School).filter(School.OrganizationId.is_(None))
+                               if _norm(x.SchoolName) == key[1]), None)
+                if linked is not None:
+                    linked.OrganizationId = org_id
+                    stats["schools_linked"] += 1
+                else:
+                    linked = School(SchoolName=school_name.strip(), IsActive="Y", OrganizationId=org_id)
+                    db.add(linked)
+                    stats["schools_created"] += 1
+                db.flush()
+            school_ids[key] = linked.SchoolId
+        school_id = school_ids[key]
+        if not dept_name:
+            continue
+        dn = _norm(dept_name)
+        in_org = [d for d in db.query(DepartmentMaster).filter(DepartmentMaster.OrganizationId == org_id)
+                  if _norm(d.DepartmentName) == dn]
+        if any(d.SchoolId == school_id for d in in_org):
+            stats["departments_existing"] += 1
+            continue
+        free = next((d for d in in_org if d.SchoolId is None), None)
+        if free is not None:
+            free.SchoolId = school_id
+            stats["departments_linked"] += 1
+        else:
+            # Same name in another school of this organization (e.g. Computer Science in PSCS and Campus II SF).
+            db.add(DepartmentMaster(OrganizationId=org_id, DepartmentName=dept_name.strip(), IsActive="Y", SchoolId=school_id))
+            stats["departments_created"] += 1
+        db.flush()
+    return stats
+
+
+@router.post("/hierarchy-import")
+async def import_hierarchy(
+    file: UploadFile = File(...),
+    commit: bool = Form(default=False),
+    org_map: str = Form(default="{}"),
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+) -> dict:
+    """Organization > School > Department from an Excel sheet (columns Organization, School, Department).
+    commit=false: a dry run - what would be created or linked, and which existing organization each name in the
+    file is matched to. org_map {"name in file": OrganizationId | null (= create it)} overrides the matches.
+    Nothing already set up is renamed or removed; names are matched ignoring case and extra spaces."""
+    rows = _read_hierarchy_rows(await file.read(), file.filename or "")
+    try:
+        chosen = {str(k): (int(v) if v not in (None, "", "new") else None) for k, v in json.loads(org_map or "{}").items()}
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(400, "Bad organization choices.")
+    orgs = db.query(Organization).all()
+    file_orgs = []
+    for name in dict.fromkeys(o for o, _, _ in rows):
+        file_orgs.append({
+            "name": name,
+            "schools": len({_norm(s) for o, s, _ in rows if o == name}),
+            "departments": sum(1 for o, _, d in rows if o == name and d),
+            "suggested_id": _suggest_org(name, orgs),
+        })
+    effective = {f["name"]: chosen[f["name"]] if f["name"] in chosen else f["suggested_id"] for f in file_orgs}
+    try:
+        stats = _apply_hierarchy(db, rows, effective)
+        if commit:
+            db.commit()
+        else:
+            db.rollback()
+    except Exception:
+        db.rollback()
+        raise
+    return {"committed": commit, "rows": len(rows), "organizations": file_orgs, "used": effective, **stats}
 
 
 # ---- Designations ----

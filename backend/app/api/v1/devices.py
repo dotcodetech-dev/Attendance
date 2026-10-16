@@ -33,7 +33,7 @@ from app.schemas.device import (
 )
 from app.services.attendance_ingest import fetch_and_store
 from app.services.employee_delete import blocked_pins, not_a_staff_pin, student_codes
-from app.services.bio_store import template_counts, upsert_template
+from app.services.bio_store import CAMERA_PHOTO_SOURCES, template_counts, upsert_template
 from app.services.campus_scope import allowed_device_ids, devices_query, link_new_device, user_org_id
 from app.services.push_channel import (
     PUSH_ONLINE_SECONDS, channel_for, is_ai_reader, is_push_online, push_delete_user, push_reader_status,
@@ -897,6 +897,45 @@ def sync_employees_to_device(
     )
 
 
+def _reader_photo_query(db: Session, code: str):
+    return (db.query(EmployeePhoto)
+            .filter(EmployeePhoto.EmployeeCode == code)
+            .filter((EmployeePhoto.Source.is_(None)) | (~EmployeePhoto.Source.in_(CAMERA_PHOTO_SOURCES))))
+
+
+PHOTO_WAIT_SECONDS = 15
+
+
+def _pull_photo_by_push(db: Session, device: Device, code: str) -> DeviceMachineUserPhotoPullResponse:
+    """AI-face reader (no SDK): ask it for this person and wait a few seconds for the answer - it polls every
+    second - so the result is definite: the photo arrived, or the reader has none for them."""
+    def answer(found: bool, msg: str) -> DeviceMachineUserPhotoPullResponse:
+        return DeviceMachineUserPhotoPullResponse(DeviceId=device.DeviceId, EmployeeCode=code, connected=True,
+                                                  photo_found=found, stored=found, source="push", message=msg)
+    if _reader_photo_query(db, code).first() is not None:
+        return answer(True, "Photo is on the server: press View photo.")
+    cmd = queue_photo_upload(db, device, code)
+    deadline = time.monotonic() + PHOTO_WAIT_SECONDS
+    answered_at = None
+    while time.monotonic() < deadline:
+        time.sleep(1)
+        db.expire_all()
+        if _reader_photo_query(db, code).first() is not None:
+            return answer(True, f"Photo received from {device.DeviceName}: press View photo.")
+        if answered_at is None:
+            status = db.get(DeviceCommand, cmd.DeviceCommandId)
+            if status is not None and status.Status in ("Executed", "Failed"):
+                answered_at = time.monotonic()   # the reader acked; its uploads arrive right around the ack
+        elif time.monotonic() - answered_at >= 3:
+            return answer(False, (
+                f"{device.DeviceName} sent this person but has no photo for them, only the face template "
+                "(usual when the face was transferred from the server). Add a photo on the Enrollment page, "
+                "or enroll the person again on the reader."))
+    return answer(False, (
+        f"{device.DeviceName} did not answer yet (last polled {last_polled_text(device)}). "
+        "The request stays queued; press View photo later, or Fetch photo again."))
+
+
 @router.post("/{device_id}/machine-users/{employee_code}/photo/pull", response_model=DeviceMachineUserPhotoPullResponse)
 def pull_machine_user_photo(
     device_id: int,
@@ -910,15 +949,7 @@ def pull_machine_user_photo(
     if not row:
         raise HTTPException(status_code=404, detail="Device not found")
     if is_ai_reader(row):
-        # The SDK cannot log in to an AI-face reader: it uploads its photos itself when asked (push protocol).
-        code = employee_code.strip()
-        have = db.query(EmployeePhoto.EmployeePhotoId).filter(EmployeePhoto.EmployeeCode == code).first() is not None
-        queued = 0 if have else queue_photo_upload(db, row)
-        return DeviceMachineUserPhotoPullResponse(
-            DeviceId=device_id, EmployeeCode=code, connected=True, photo_found=have, stored=have, source="push",
-            message=("Photo is on the server: press View photo." if have else
-                     ("Asked the reader to upload its photos. " if queued else "The reader was already asked to upload its photos. ")
-                     + f"It sends them when it next polls ({last_polled_text(row)}); press View photo in a minute."))
+        return _pull_photo_by_push(db, row, employee_code.strip())
     if not row.DeviceIPAddress:
         raise HTTPException(status_code=400, detail="Device IP Address is missing")
 
